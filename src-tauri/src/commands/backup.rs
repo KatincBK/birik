@@ -77,7 +77,7 @@ pub async fn build_export_payload(pool: &SqlitePool) -> AppResult<ExportPayload>
     .fetch_all(pool)
     .await?;
     let transactions: Vec<Transaction> = sqlx::query_as(
-        "SELECT id, asset_id, date, type, source, quantity, price, fee, note, is_deleted, created_at, fx_to_usd, platform
+        "SELECT id, asset_id, date, type, source, quantity, price, fee, note, is_deleted, created_at, fx_to_usd, platform, expected_yield_pct
          FROM transactions",
     )
     .fetch_all(pool)
@@ -279,8 +279,8 @@ async fn do_replace(pool: &SqlitePool, p: ExportPayload) -> AppResult<ImportResu
     }
     for t in &p.transactions {
         sqlx::query(
-            "INSERT INTO transactions (id, asset_id, date, type, source, quantity, price, fee, note, is_deleted, created_at, fx_to_usd, platform)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            "INSERT INTO transactions (id, asset_id, date, type, source, quantity, price, fee, note, is_deleted, created_at, fx_to_usd, platform, expected_yield_pct)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
         )
         .bind(t.id)
         .bind(t.asset_id)
@@ -295,6 +295,7 @@ async fn do_replace(pool: &SqlitePool, p: ExportPayload) -> AppResult<ImportResu
         .bind(t.created_at)
         .bind(t.fx_to_usd)
         .bind(&t.platform)
+        .bind(t.expected_yield_pct)
         .execute(&mut *tx)
         .await?;
     }
@@ -475,8 +476,8 @@ async fn do_merge(pool: &SqlitePool, p: ExportPayload) -> AppResult<ImportResult
         } else {
             let new_id: (i64,) = sqlx::query_as(
                 "INSERT INTO transactions
-                    (asset_id, date, type, source, quantity, price, fee, note, is_deleted, created_at, fx_to_usd, platform)
-                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING id",
+                    (asset_id, date, type, source, quantity, price, fee, note, is_deleted, created_at, fx_to_usd, platform, expected_yield_pct)
+                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING id",
             )
             .bind(local_aid)
             .bind(it.date)
@@ -490,6 +491,7 @@ async fn do_merge(pool: &SqlitePool, p: ExportPayload) -> AppResult<ImportResult
             .bind(it.created_at)
             .bind(it.fx_to_usd)
             .bind(&it.platform)
+            .bind(it.expected_yield_pct)
             .fetch_one(&mut *tx)
             .await?;
             t_map.insert(it.id, new_id.0);

@@ -15,8 +15,31 @@ import { AssetIcon } from "./AssetIcon";
 import { api, type Asset } from "../lib/api";
 import { useAssetStore } from "../stores/assetStore";
 import { usePortfolioStore } from "../stores/portfolioStore";
+import { PlatformChipList } from "./PlatformChipList";
 
 const LAST_PLATFORM_KEY = "birik.lastPlatform";
+const RECENT_SEARCHES_KEY = "birik.recentSearches";
+const MAX_RECENT = 8;
+
+function loadRecentSearches(): SearchHit[] {
+  try {
+    const raw = localStorage.getItem(RECENT_SEARCHES_KEY);
+    if (!raw) return [];
+    const arr = JSON.parse(raw);
+    if (Array.isArray(arr)) return arr.slice(0, MAX_RECENT);
+  } catch {}
+  return [];
+}
+function saveRecentSearch(hit: SearchHit) {
+  try {
+    const list = loadRecentSearches().filter(
+      (h) =>
+        !(h.symbol === hit.symbol && h.asset_type === hit.asset_type)
+    );
+    list.unshift(hit);
+    localStorage.setItem(RECENT_SEARCHES_KEY, JSON.stringify(list.slice(0, MAX_RECENT)));
+  } catch {}
+}
 import { useTransactionStore } from "../stores/transactionStore";
 import { useStatsStore } from "../stores/statsStore";
 import { useSettingsStore } from "../stores/useSettingsStore";
@@ -98,6 +121,7 @@ export function AddAssetModal({ portfolioId }: { portfolioId: number }) {
   const [query, setQuery] = useState("");
   const debounced = useDebounce(query, 300);
   const [hits, setHits] = useState<SearchHit[]>([]);
+  const [recent, setRecent] = useState<SearchHit[]>(() => loadRecentSearches());
   const [searching, setSearching] = useState(false);
 
   // Manuel (fx/commodity) için
@@ -118,6 +142,7 @@ export function AddAssetModal({ portfolioId }: { portfolioId: number }) {
     () => localStorage.getItem(LAST_PLATFORM_KEY) ?? ""
   );
   const [platformFocused, setPlatformFocused] = useState(false);
+  const [platformExpanded, setPlatformExpanded] = useState(false);
   const [advancedOpen, setAdvancedOpen] = useState(false);
   const [date, setDate] = useState(todayLocalDateInput());
   const [fee, setFee] = useState("");
@@ -294,6 +319,8 @@ export function AddAssetModal({ portfolioId }: { portfolioId: number }) {
   }, [stage, pickedHit?.symbol, pickedAssetType]);
 
   const onPickHit = (hit: SearchHit) => {
+    saveRecentSearch(hit);
+    setRecent(loadRecentSearches());
     setPickedHit(hit);
     const t: AssetTypeKey =
       hit.asset_type === "stock" ? "stock" : "crypto";
@@ -544,9 +571,42 @@ export function AddAssetModal({ portfolioId }: { portfolioId: number }) {
               </div>
             )}
             {!searching && debounced.trim().length < 2 && (
-              <p className="px-4 py-6 text-center text-sm text-(--color-text-tertiary)">
-                En az 2 karakter yaz, sonuçlar burada görünür.
-              </p>
+              recent.length > 0 ? (
+                <div>
+                  <div className="border-b border-(--color-border-subtle) bg-(--color-bg-base)/40 px-4 py-2 text-[10px] font-medium tracking-[0.06em] text-(--color-text-tertiary) uppercase">
+                    Son aranan
+                  </div>
+                  <ul>
+                    {recent.map((h) => (
+                      <li key={`recent-${h.asset_type}-${h.external_id}`}>
+                        <button
+                          onClick={() => onPickHit(h)}
+                          className="flex w-full items-center gap-3 border-b border-(--color-border-subtle) px-4 py-2.5 text-left transition-colors last:border-b-0 hover:bg-(--color-bg-hover)"
+                        >
+                          <AssetIcon
+                            symbol={h.symbol}
+                            iconUrl={h.icon}
+                            type={h.asset_type}
+                            size={32}
+                          />
+                          <div className="min-w-0 flex-1">
+                            <div className="truncate text-sm font-medium tabular">
+                              {h.symbol}
+                            </div>
+                            <div className="truncate text-xs text-(--color-text-tertiary)">
+                              {h.name}
+                            </div>
+                          </div>
+                        </button>
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              ) : (
+                <p className="px-4 py-6 text-center text-sm text-(--color-text-tertiary)">
+                  En az 2 karakter yaz, sonuçlar burada görünür.
+                </p>
+              )
             )}
             {!searching && debounced.trim().length >= 2 && hits.length === 0 && (
               <div className="px-4 py-6 text-center">
@@ -713,24 +773,13 @@ export function AddAssetModal({ portfolioId }: { portfolioId: number }) {
                 transition={{ duration: 0.18, ease: [0.16, 1, 0.3, 1] }}
                 className="overflow-hidden"
               >
-                <div className="mt-1.5 flex flex-wrap gap-1">
-                  {knownPlatforms.map((p) => (
-                    <button
-                      key={p}
-                      type="button"
-                      onMouseDown={(e) => e.preventDefault()}
-                      onClick={() => setPlatform(p)}
-                      className={cn(
-                        "rounded-md border px-2 py-0.5 text-[11px] transition-colors",
-                        platform === p
-                          ? "border-(--color-accent)/40 bg-(--color-accent)/15 text-(--color-accent)"
-                          : "border-(--color-border-subtle) bg-(--color-bg-base) text-(--color-text-secondary) hover:border-(--color-accent)/40 hover:text-(--color-accent)"
-                      )}
-                    >
-                      {p}
-                    </button>
-                  ))}
-                </div>
+                <PlatformChipList
+                  items={knownPlatforms}
+                  value={platform}
+                  onSelect={setPlatform}
+                  expanded={platformExpanded}
+                  onToggleExpand={() => setPlatformExpanded((v) => !v)}
+                />
               </motion.div>
             )}
           </AnimatePresence>

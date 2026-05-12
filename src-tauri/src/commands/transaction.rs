@@ -92,6 +92,7 @@ pub async fn create_transaction(
     note: Option<String>,
     tags: Option<Vec<String>>,
     platform: Option<String>,
+    expected_yield_pct: Option<f64>,
 ) -> AppResult<Transaction> {
     validate(&r#type, source.as_deref(), quantity, price, date)?;
     let fee = fee.unwrap_or(0.0);
@@ -105,9 +106,9 @@ pub async fn create_transaction(
 
     let row: Transaction = sqlx::query_as(
         "INSERT INTO transactions
-            (asset_id, date, type, source, quantity, price, fee, note, is_deleted, created_at, fx_to_usd, platform)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?)
-         RETURNING id, asset_id, date, type, source, quantity, price, fee, note, is_deleted, created_at, fx_to_usd, platform",
+            (asset_id, date, type, source, quantity, price, fee, note, is_deleted, created_at, fx_to_usd, platform, expected_yield_pct)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?, ?)
+         RETURNING id, asset_id, date, type, source, quantity, price, fee, note, is_deleted, created_at, fx_to_usd, platform, expected_yield_pct",
     )
     .bind(asset_id)
     .bind(date)
@@ -120,6 +121,7 @@ pub async fn create_transaction(
     .bind(now_secs())
     .bind(fx_to_usd)
     .bind(&platform_clean)
+    .bind(expected_yield_pct)
     .fetch_one(&mut *tx)
     .await?;
 
@@ -157,7 +159,7 @@ pub async fn list_transactions(
     let rows: Vec<Transaction> = match (include_deleted, tag) {
         (true, None) => {
             sqlx::query_as(
-                "SELECT id, asset_id, date, type, source, quantity, price, fee, note, is_deleted, created_at, fx_to_usd, platform
+                "SELECT id, asset_id, date, type, source, quantity, price, fee, note, is_deleted, created_at, fx_to_usd, platform, expected_yield_pct
                  FROM transactions WHERE asset_id = ? ORDER BY date DESC, id DESC",
             )
             .bind(asset_id)
@@ -166,7 +168,7 @@ pub async fn list_transactions(
         }
         (false, None) => {
             sqlx::query_as(
-                "SELECT id, asset_id, date, type, source, quantity, price, fee, note, is_deleted, created_at, fx_to_usd, platform
+                "SELECT id, asset_id, date, type, source, quantity, price, fee, note, is_deleted, created_at, fx_to_usd, platform, expected_yield_pct
                  FROM transactions WHERE asset_id = ? AND is_deleted = 0 ORDER BY date DESC, id DESC",
             )
             .bind(asset_id)
@@ -175,7 +177,7 @@ pub async fn list_transactions(
         }
         (true, Some(t)) => {
             sqlx::query_as(
-                "SELECT t.id, t.asset_id, t.date, t.type, t.source, t.quantity, t.price, t.fee, t.note, t.is_deleted, t.created_at, t.fx_to_usd, t.platform
+                "SELECT t.id, t.asset_id, t.date, t.type, t.source, t.quantity, t.price, t.fee, t.note, t.is_deleted, t.created_at, t.fx_to_usd, t.platform, t.expected_yield_pct
                  FROM transactions t
                  INNER JOIN transaction_tags tt ON tt.transaction_id = t.id
                  WHERE t.asset_id = ? AND tt.tag = ?
@@ -188,7 +190,7 @@ pub async fn list_transactions(
         }
         (false, Some(t)) => {
             sqlx::query_as(
-                "SELECT t.id, t.asset_id, t.date, t.type, t.source, t.quantity, t.price, t.fee, t.note, t.is_deleted, t.created_at, t.fx_to_usd, t.platform
+                "SELECT t.id, t.asset_id, t.date, t.type, t.source, t.quantity, t.price, t.fee, t.note, t.is_deleted, t.created_at, t.fx_to_usd, t.platform, t.expected_yield_pct
                  FROM transactions t
                  INNER JOIN transaction_tags tt ON tt.transaction_id = t.id
                  WHERE t.asset_id = ? AND t.is_deleted = 0 AND tt.tag = ?
@@ -264,10 +266,11 @@ pub async fn update_transaction(
     note: Option<String>,
     tags: Option<Vec<String>>,
     platform: Option<String>,
+    expected_yield_pct: Option<f64>,
 ) -> AppResult<Transaction> {
     // Mevcut tx'i bul (tip kontrolü için)
     let existing: Transaction = sqlx::query_as(
-        "SELECT id, asset_id, date, type, source, quantity, price, fee, note, is_deleted, created_at, fx_to_usd, platform
+        "SELECT id, asset_id, date, type, source, quantity, price, fee, note, is_deleted, created_at, fx_to_usd, platform, expected_yield_pct
          FROM transactions WHERE id = ?",
     )
     .bind(id)
@@ -300,9 +303,9 @@ pub async fn update_transaction(
 
     let updated: Transaction = sqlx::query_as(
         "UPDATE transactions
-         SET date = ?, quantity = ?, price = ?, fee = ?, note = ?, fx_to_usd = ?, platform = ?
+         SET date = ?, quantity = ?, price = ?, fee = ?, note = ?, fx_to_usd = ?, platform = ?, expected_yield_pct = ?
          WHERE id = ?
-         RETURNING id, asset_id, date, type, source, quantity, price, fee, note, is_deleted, created_at, fx_to_usd, platform",
+         RETURNING id, asset_id, date, type, source, quantity, price, fee, note, is_deleted, created_at, fx_to_usd, platform, expected_yield_pct",
     )
     .bind(date)
     .bind(quantity)
@@ -311,6 +314,7 @@ pub async fn update_transaction(
     .bind(&note)
     .bind(fx_to_usd)
     .bind(&platform_clean)
+    .bind(expected_yield_pct)
     .bind(id)
     .fetch_one(&mut *tx)
     .await?;

@@ -111,6 +111,15 @@ export function BulkPlatformAssignModal({
 
   /* ---------- Step 1: platform adı ---------- */
   if (step === "name") {
+    // Mevcut platformlar — tüm asset'lerden derive
+    const existingPlatforms = (() => {
+      const set = new Set<string>();
+      for (const a of allAssets) {
+        if (a.platform && a.platform.trim()) set.add(a.platform.trim());
+      }
+      return [...set].sort((a, b) => a.localeCompare(b));
+    })();
+
     return (
       <ModalShell
         title="Platform ata"
@@ -130,8 +139,44 @@ export function BulkPlatformAssignModal({
           </>
         }
       >
+        {existingPlatforms.length > 0 && (
+          <div className="mb-4">
+            <div className="mb-2 text-[10px] font-medium tracking-[0.06em] text-(--color-text-tertiary) uppercase">
+              Mevcut platformlar
+            </div>
+            <div className="flex flex-wrap gap-1.5">
+              {existingPlatforms.map((p) => (
+                <button
+                  key={p}
+                  type="button"
+                  onClick={() => {
+                    setPlatform(p);
+                    // Mevcut platform → ona zaten atanmış asset'leri default işaretle
+                    setSelected(
+                      new Set(
+                        allAssets.filter((a) => a.platform === p).map((a) => a.id)
+                      )
+                    );
+                  }}
+                  className={cn(
+                    "rounded-md border px-3 py-1 text-xs transition-colors",
+                    platform === p
+                      ? "border-(--color-accent)/40 bg-(--color-accent)/15 text-(--color-accent)"
+                      : "border-(--color-border-subtle) bg-(--color-bg-base) text-(--color-text-secondary) hover:border-(--color-accent)/40 hover:text-(--color-accent)"
+                  )}
+                >
+                  {p}
+                </button>
+              ))}
+            </div>
+            <p className="mt-1.5 text-[11px] text-(--color-text-tertiary)">
+              Birine tıkla → o platforma asset ekle/çıkar. Yeni platform için
+              aşağıya yaz.
+            </p>
+          </div>
+        )}
         <Field
-          label="Platform / borsa"
+          label={existingPlatforms.length > 0 ? "Yeni veya mevcut platform" : "Platform / borsa"}
           hint="Aynı isimde mevcut varlıklar otomatik seçili gelecek"
         >
           <input

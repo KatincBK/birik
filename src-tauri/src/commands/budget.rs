@@ -1,10 +1,189 @@
 use serde::Serialize;
+use sqlx::SqlitePool;
 use tauri::State;
 
 use crate::commands::now_secs;
 use crate::db::models::{Budget, BudgetEntry};
 use crate::error::{AppError, AppResult};
 use crate::services::Db;
+
+const DEFAULT_GROWTH_PCT: f64 = 8.0;
+
+/// Settings'ten mode + custom değer okur, ETA hesabı için yıllık sermaye
+/// büyüme oranı (%) döndürür. Mode'lar:
+///   "auto"             → portfolio CAGR (cost-weighted), yoksa %8 fallback
+///   "from_investments" → investment_entries cash-flow bazlı basit CAGR
+///   "custom"           → kullanıcının custom_growth_pct_yearly değeri
+async fn compute_growth_estimate(
+    pool: &SqlitePool,
+    profile_id: Option<i64>,
+    current_portfolio_value: f64,
+) -> Option<f64> {
+    let mode: String = sqlx::query_scalar(
+        "SELECT value FROM settings WHERE key = 'growth_estimate_mode'",
+    )
+    .fetch_optional(pool)
+    .await
+    .ok()
+    .flatten()
+    .unwrap_or_else(|| "auto".to_string());
+
+    let custom_pct: f64 = sqlx::query_scalar::<_, String>(
+        "SELECT value FROM settings WHERE key = 'custom_growth_pct_yearly'",
+    )
+    .fetch_optional(pool)
+    .await
+    .ok()
+    .flatten()
+    .and_then(|s| s.parse::<f64>().ok())
+    .unwrap_or(DEFAULT_GROWTH_PCT);
+
+    let Some(pid) = profile_id else {
+        return Some(DEFAULT_GROWTH_PCT);
+    };
+
+    match mode.as_str() {
+        "custom" => Some(custom_pct),
+        "from_investments" => {
+            compute_investment_based_cagr(pool, pid, current_portfolio_value)
+                .await
+                .or(Some(DEFAULT_GROWTH_PCT))
+        }
+        _ => {
+            // "auto" — portfolio history CAGR varsa onu, yoksa default
+            compute_portfolio_cagr(pool, pid)
+                .await
+                .or(Some(DEFAULT_GROWTH_PCT))
+        }
+    }
+}
+
+/// Cost-weighted holding period bazlı portfolio CAGR (% / yıl). 50 günden az
+/// pozisyon → None. Profilin USD-base toplamı üzerinden hesap.
+async fn compute_portfolio_cagr(pool: &SqlitePool, profile_id: i64) -> Option<f64> {
+    let portfolios: Vec<crate::db::models::Portfolio> = sqlx::query_as(
+        "SELECT id, name, created_at, pinned, profile_id FROM portfolios WHERE profile_id = ?",
+    )
+    .bind(profile_id)
+    .fetch_all(pool)
+    .await
+    .ok()?;
+
+    let mut total_value = 0.0;
+    let mut total_invested = 0.0;
+    let mut cost_weighted_years = 0.0;
+    let mut total_cost_for_cagr = 0.0;
+
+    for p in &portfolios {
+        let s = match crate::commands::calc::calculate_portfolio_inner(pool, p.id, "USD").await {
+            Ok(s) => s,
+            Err(_) => continue,
+        };
+        total_value += s.total_value;
+        total_invested += s.total_cost;
+        for a in &s.assets {
+            if a.total_cost_display <= 0.0 {
+                continue;
+            }
+            let first_buy: Option<(Option<i64>,)> = sqlx::query_as(
+                "SELECT MIN(date) FROM transactions
+                 WHERE asset_id = ? AND type = 'buy' AND is_deleted = 0",
+            )
+            .bind(a.asset_id)
+            .fetch_optional(pool)
+            .await
+            .ok()
+            .flatten();
+            if let Some((Some(d),)) = first_buy {
+                let now = chrono::Utc::now().timestamp();
+                let secs = (now - d).max(0);
+                let years = secs as f64 / (365.25 * 24.0 * 3600.0);
+                if years > 0.0 {
+                    cost_weighted_years += a.total_cost_display * years;
+                    total_cost_for_cagr += a.total_cost_display;
+                }
+            }
+        }
+    }
+    if total_cost_for_cagr <= 0.0 || total_value <= 0.0 || total_invested <= 0.0 {
+        return None;
+    }
+    let avg_years = cost_weighted_years / total_cost_for_cagr;
+    if avg_years <= 0.05 {
+        return None;
+    }
+    let ratio = total_value / total_invested;
+    if ratio <= 0.0 {
+        return None;
+    }
+    Some((ratio.powf(1.0 / avg_years) - 1.0) * 100.0)
+}
+
+/// investment_entries kayıtlarının USD-locked toplamı vs. current portfolio
+/// üzerinden basit yıllıklaştırılmış return. Veri yoksa None.
+async fn compute_investment_based_cagr(
+    pool: &SqlitePool,
+    profile_id: i64,
+    current_portfolio_value: f64,
+) -> Option<f64> {
+    #[derive(sqlx::FromRow)]
+    struct Row {
+        year_month: String,
+        amount: f64,
+        fx_to_usd: Option<f64>,
+        currency: String,
+    }
+    let rows: Vec<Row> = sqlx::query_as(
+        "SELECT year_month, amount, fx_to_usd, currency
+         FROM investment_entries WHERE profile_id = ?",
+    )
+    .bind(profile_id)
+    .fetch_all(pool)
+    .await
+    .ok()?;
+    if rows.is_empty() {
+        return None;
+    }
+    let mut total_usd = 0.0;
+    let mut earliest_year_month: Option<String> = None;
+    for r in &rows {
+        let usd = if let Some(f) = r.fx_to_usd {
+            r.amount * f
+        } else if r.currency.eq_ignore_ascii_case("USD") {
+            r.amount
+        } else {
+            continue;
+        };
+        total_usd += usd;
+        match &earliest_year_month {
+            None => earliest_year_month = Some(r.year_month.clone()),
+            Some(e) if r.year_month < *e => earliest_year_month = Some(r.year_month.clone()),
+            _ => {}
+        }
+    }
+    if total_usd <= 0.0 {
+        return None;
+    }
+    let earliest = earliest_year_month?;
+    let parts: Vec<&str> = earliest.split('-').collect();
+    if parts.len() != 2 {
+        return None;
+    }
+    let y: i32 = parts[0].parse().ok()?;
+    let m: u32 = parts[1].parse().ok()?;
+    let start_date = chrono::NaiveDate::from_ymd_opt(y, m, 15)?;
+    let now = chrono::Utc::now().date_naive();
+    let days = (now - start_date).num_days().max(1);
+    let years = days as f64 / 365.25;
+    if years <= 0.05 {
+        return None;
+    }
+    let ratio = current_portfolio_value / total_usd;
+    if ratio <= 0.0 {
+        return None;
+    }
+    Some((ratio.powf(1.0 / years) - 1.0) * 100.0)
+}
 
 const BUDGET_COLS: &str = "id, name, monthly_income, monthly_expense, currency, \
     target_value, target_date, pinned, created_at, profile_id, target_currency";
@@ -347,8 +526,17 @@ pub async fn project_budget(
     } else {
         0.0
     };
-    let monthly_yield_rate = avg_yearly_yield_pct / 100.0 / 12.0;
-    let monthly_addition = monthly_savings + monthly_passive_income;
+
+    // Sermaye büyüme tahmini — settings'ten mode oku
+    let growth_pct =
+        compute_growth_estimate(&db.pool, budget.profile_id, current_portfolio_value)
+            .await
+            .unwrap_or(8.0);
+
+    // Toplam yıllık büyüme = sermaye + pasif gelir (kullanıcının seçimi)
+    let total_yearly_pct = growth_pct + avg_yearly_yield_pct;
+    let monthly_yield_rate = total_yearly_pct / 100.0 / 12.0;
+    let monthly_addition = monthly_savings;
 
     let mut trajectory = Vec::with_capacity(13);
     let mut v = current_portfolio_value;

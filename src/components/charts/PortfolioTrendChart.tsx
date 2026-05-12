@@ -121,11 +121,12 @@ export function PortfolioTrendChart({
             <div className="grid h-full place-items-center text-center">
               <div>
                 <p className="text-sm text-(--color-text-secondary)">
-                  Henüz portföy verisi yok
+                  Bu aralık için grafik üretilemedi
                 </p>
                 <p className="mt-1 text-xs text-(--color-text-tertiary)">
-                  Bir varlık ekleyince hipotetik geçmiş hemen oluşur; günlük
-                  snapshot'lar real seri olarak birikir.
+                  Daha kısa bir aralık (1A) deneyin, ya da fiyat verileri
+                  birikene kadar bekleyin. Yeni asset eklenince ilk fiyat
+                  fetch'i biraz zaman alabilir.
                 </p>
               </div>
             </div>

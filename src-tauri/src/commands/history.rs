@@ -451,7 +451,7 @@ pub async fn fetch_portfolio_history(
         // Bugünkü bakiye
         let txns: Vec<crate::db::models::Transaction> = sqlx::query_as(
             "SELECT id, asset_id, date, type, source, quantity, price, fee, note,
-                    is_deleted, created_at, fx_to_usd, platform
+                    is_deleted, created_at, fx_to_usd, platform, expected_yield_pct
              FROM transactions WHERE asset_id = ? AND is_deleted = 0",
         )
         .bind(a.id)
@@ -552,37 +552,27 @@ pub async fn fetch_portfolio_history(
             });
             samples += 1;
         } else if !asset_calcs.is_empty() {
-            // Hypothetical: bugünkü bakiyeler × o günkü fiyat × o günkü fx_to_usd
+            // Hypothetical: bugünkü bakiyeler × o günkü fiyat × o günkü fx_to_usd.
+            // Kısmi resolve permissive — bir asset'in price/fx history'si o kadar
+            // geriye gitmiyorsa o asset'i 0 say, diğerleri için hesabı sürdür.
+            // Aksi takdirde tek bir asset'in eksik tarihinden bütün grafik boş kalır.
             let mut total_usd = 0.0;
-            let mut all_resolved = true;
+            let mut any_resolved = false;
             for ac in &asset_calcs {
-                let price = match nearest_at_or_before(&ac.prices, day_ms) {
-                    Some(p) => p,
-                    None => {
-                        all_resolved = false;
-                        break;
-                    }
-                };
+                let price = nearest_at_or_before(&ac.prices, day_ms);
                 let fx_to_usd = if ac.currency == "USD" {
-                    1.0
+                    Some(1.0)
                 } else {
-                    match fx_series.get(&ac.currency) {
-                        Some(s) => match nearest_at_or_before(s, day_ms) {
-                            Some(v) => v,
-                            None => {
-                                all_resolved = false;
-                                break;
-                            }
-                        },
-                        None => {
-                            all_resolved = false;
-                            break;
-                        }
-                    }
+                    fx_series
+                        .get(&ac.currency)
+                        .and_then(|s| nearest_at_or_before(s, day_ms))
                 };
-                total_usd += ac.balance * price * fx_to_usd;
+                if let (Some(p), Some(fx)) = (price, fx_to_usd) {
+                    total_usd += ac.balance * p * fx;
+                    any_resolved = true;
+                }
             }
-            if all_resolved {
+            if any_resolved {
                 let value_in_display = match &current_fx {
                     Some(fx) => crate::commands::calc::convert(
                         total_usd,
@@ -598,7 +588,6 @@ pub async fn fetch_portfolio_history(
                     is_hypothetical: true,
                 });
             }
-            // resolved olmayan günleri (range çok geri, asset history o kadar geriye gitmiyor) atla
         }
         day = day.succ_opt().unwrap_or(today_naive);
         if day > today_naive {

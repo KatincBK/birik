@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
-import { ArrowLeft, Plus, Trash2, X, Pencil, Bell } from "lucide-react";
+import { ArrowLeft, Plus, Trash2, X, Pencil, Bell, Columns3, GripVertical } from "lucide-react";
 import { toast } from "sonner";
 import { useAssetStore } from "../stores/assetStore";
 import { useTransactionStore } from "../stores/transactionStore";
@@ -98,6 +98,88 @@ export function AssetDetail({ assetId }: { assetId: number }) {
     () => stats?.assets.find((a) => a.asset_id === assetId) ?? null,
     [stats, assetId]
   );
+
+  // Transaction tablosu sütun yönetimi (AssetTable pattern'ine paralel)
+  type TxColKey = "type" | "qty" | "price" | "fee" | "platform" | "yield" | "note";
+  const TX_COL_LABELS: Record<TxColKey, string> = {
+    type: "Tip",
+    qty: "Miktar",
+    price: "Birim Fiyat",
+    fee: "Ücret",
+    platform: "Platform",
+    yield: "Yield",
+    note: "Not",
+  };
+  const TX_DEFAULT_COLS: Record<TxColKey, boolean> = {
+    type: true,
+    qty: true,
+    price: true,
+    fee: true,
+    platform: true,
+    yield: true,
+    note: true,
+  };
+  const TX_DEFAULT_ORDER: TxColKey[] = [
+    "type",
+    "qty",
+    "price",
+    "fee",
+    "platform",
+    "yield",
+    "note",
+  ];
+  const [txCols, setTxCols] = useState<Record<TxColKey, boolean>>(() => {
+    try {
+      const raw = localStorage.getItem("birik.txColumns");
+      if (raw) return { ...TX_DEFAULT_COLS, ...JSON.parse(raw) };
+    } catch {}
+    return TX_DEFAULT_COLS;
+  });
+  const [txColOrder, setTxColOrder] = useState<TxColKey[]>(() => {
+    try {
+      const raw = localStorage.getItem("birik.txColumnsOrder");
+      if (raw) {
+        const parsed: TxColKey[] = JSON.parse(raw);
+        const set = new Set(parsed);
+        const merged = parsed.filter((k) => TX_DEFAULT_ORDER.includes(k));
+        for (const k of TX_DEFAULT_ORDER) if (!set.has(k)) merged.push(k);
+        return merged;
+      }
+    } catch {}
+    return TX_DEFAULT_ORDER;
+  });
+  const [txColsOpen, setTxColsOpen] = useState(false);
+  const [txDragKey, setTxDragKey] = useState<TxColKey | null>(null);
+  useEffect(() => {
+    if (!txColsOpen) return;
+    const close = (e: MouseEvent) => {
+      const target = e.target as HTMLElement;
+      if (!target.closest("[data-tx-cols-menu]")) setTxColsOpen(false);
+    };
+    window.addEventListener("click", close);
+    return () => window.removeEventListener("click", close);
+  }, [txColsOpen]);
+  const toggleTxCol = (k: TxColKey) => {
+    setTxCols((cur) => {
+      const next = { ...cur, [k]: !cur[k] };
+      try {
+        localStorage.setItem("birik.txColumns", JSON.stringify(next));
+      } catch {}
+      return next;
+    });
+  };
+  const reorderTxCols = (dragged: TxColKey, target: TxColKey) => {
+    if (dragged === target) return;
+    setTxColOrder((cur) => {
+      const list = cur.filter((k) => k !== dragged);
+      const idx = list.indexOf(target);
+      list.splice(idx, 0, dragged);
+      try {
+        localStorage.setItem("birik.txColumnsOrder", JSON.stringify(list));
+      } catch {}
+      return list;
+    });
+  };
 
   // Platform başına balance — transactions'tan derive
   const platformBreakdown = useMemo(() => {
@@ -233,6 +315,58 @@ export function AssetDetail({ assetId }: { assetId: number }) {
           </button>
         </div>
       </header>
+
+      {/* Toplam değer + yıllık pasif gelir özet barı */}
+      {assetStats && (
+        <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+          <div className="rounded-xl border border-(--color-border-subtle) bg-(--color-bg-panel) px-5 py-4">
+            <div className="text-[11px] font-medium tracking-[0.05em] text-(--color-text-secondary) uppercase">
+              Toplam değer
+            </div>
+            <div className="mt-1 text-3xl font-semibold tabular tracking-tight">
+              {assetStats.market_value_display != null ? (
+                formatCurrency(
+                  assetStats.market_value_display,
+                  displayCurrency,
+                  "summary"
+                )
+              ) : (
+                <span className="text-(--color-text-tertiary) text-2xl">—</span>
+              )}
+            </div>
+          </div>
+          <div className="rounded-xl border border-(--color-border-subtle) bg-(--color-bg-panel) px-5 py-4">
+            <div className="text-[11px] font-medium tracking-[0.05em] text-(--color-text-secondary) uppercase">
+              Yıllık pasif gelir (ort.)
+            </div>
+            <div className="mt-1 flex items-baseline gap-2">
+              <span className="text-3xl font-semibold tabular tracking-tight text-(--color-accent)">
+                {assetStats.market_value_display != null &&
+                assetStats.expected_yield_pct != null
+                  ? formatCurrency(
+                      (assetStats.market_value_display *
+                        assetStats.expected_yield_pct) /
+                        100,
+                      displayCurrency,
+                      "summary"
+                    )
+                  : "—"}
+              </span>
+              {assetStats.expected_yield_pct != null && (
+                <span className="text-sm text-(--color-text-tertiary) tabular">
+                  ≈ {assetStats.expected_yield_pct.toFixed(2)}%
+                </span>
+              )}
+            </div>
+            {(assetStats.platforms?.length ?? 0) > 1 && (
+              <div className="mt-0.5 text-[11px] text-(--color-text-tertiary)">
+                {assetStats.platforms.length} platformun cost-basis ağırlıklı
+                ortalaması
+              </div>
+            )}
+          </div>
+        </div>
+      )}
 
       {/* Fiyat geçmişi grafiği */}
       <PriceChart
@@ -384,16 +518,82 @@ export function AssetDetail({ assetId }: { assetId: number }) {
             </p>
           </div>
         ) : (
-          <div className="overflow-hidden rounded-xl border border-(--color-border-subtle) bg-(--color-bg-panel)">
+          <div className="relative rounded-xl border border-(--color-border-subtle) bg-(--color-bg-panel)">
+            {/* Sütun toggle — sağ üst */}
+            <div className="absolute right-2 top-2 z-10" data-tx-cols-menu>
+              <button
+                onClick={(e) => {
+                  e.stopPropagation();
+                  setTxColsOpen((v) => !v);
+                }}
+                className="rounded-md border border-(--color-border-subtle) bg-(--color-bg-base) p-1 text-(--color-text-tertiary) transition-colors hover:text-(--color-text-primary)"
+                title="Sütunları düzenle"
+              >
+                <Columns3 className="h-3.5 w-3.5" />
+              </button>
+              {txColsOpen && (
+                <div className="absolute right-0 top-full mt-1 min-w-[200px] overflow-hidden rounded-lg border border-(--color-border-subtle) bg-(--color-bg-panel) py-1 text-sm shadow-2xl shadow-black/50">
+                  <div className="px-3 pb-1 pt-0.5 text-[10px] tracking-wide text-(--color-text-tertiary) uppercase">
+                    Tut & sürükle sıralama
+                  </div>
+                  {txColOrder.map((k) => (
+                    <div
+                      key={k}
+                      draggable
+                      onDragStart={(e) => {
+                        e.dataTransfer.effectAllowed = "move";
+                        e.dataTransfer.setData("text/plain", k);
+                        setTxDragKey(k);
+                      }}
+                      onDragOver={(e) => {
+                        e.preventDefault();
+                        e.dataTransfer.dropEffect = "move";
+                      }}
+                      onDrop={(e) => {
+                        e.preventDefault();
+                        const dropped = e.dataTransfer.getData("text/plain") as TxColKey;
+                        if (dropped && dropped !== k) reorderTxCols(dropped, k);
+                        setTxDragKey(null);
+                      }}
+                      onDragEnd={() => setTxDragKey(null)}
+                      className={cn(
+                        "flex select-none items-center gap-2 px-2 py-1.5 transition-colors",
+                        txDragKey === k
+                          ? "bg-(--color-accent)/10"
+                          : "hover:bg-(--color-bg-hover)"
+                      )}
+                    >
+                      <GripVertical className="h-3.5 w-3.5 shrink-0 cursor-grab text-(--color-text-tertiary)" />
+                      <label className="flex flex-1 cursor-pointer items-center gap-2">
+                        <input
+                          type="checkbox"
+                          checked={txCols[k]}
+                          onChange={() => toggleTxCol(k)}
+                          className="h-3.5 w-3.5 accent-(--color-accent)"
+                        />
+                        <span className="text-(--color-text-primary)">
+                          {TX_COL_LABELS[k]}
+                        </span>
+                      </label>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+
             <table className="w-full text-sm">
               <thead>
                 <tr className="border-b border-(--color-border-subtle) bg-(--color-bg-base)/40 text-(--color-text-tertiary)">
                   <Th>Tarih</Th>
-                  <Th>Tip</Th>
-                  <Th align="right">Miktar</Th>
-                  <Th align="right">Birim Fiyat</Th>
-                  <Th align="right">Ücret</Th>
-                  <Th>Not</Th>
+                  {txColOrder.map((k) => {
+                    if (!txCols[k]) return null;
+                    const align = (k === "qty" || k === "price" || k === "fee" || k === "yield") ? "right" : undefined;
+                    return (
+                      <Th key={k} align={align}>
+                        {TX_COL_LABELS[k]}
+                      </Th>
+                    );
+                  })}
                   <th className="w-20" />
                 </tr>
               </thead>
@@ -421,25 +621,65 @@ export function AssetDetail({ assetId }: { assetId: number }) {
                       <Td className="text-(--color-text-secondary)">
                         {formatDate(t.date)}
                       </Td>
-                      <Td>
-                        <span className={`text-xs font-medium ${typeColor}`}>
-                          {typeLabel}
-                        </span>
-                      </Td>
-                      <Td align="right" className="tabular">
-                        {formatNumber(t.quantity, "detail")}
-                      </Td>
-                      <Td align="right" className="tabular">
-                        {t.price > 0
-                          ? formatCurrency(t.price, asset.currency, "detail")
-                          : "—"}
-                      </Td>
-                      <Td align="right" className="tabular text-(--color-text-tertiary)">
-                        {t.fee > 0 ? formatCurrency(t.fee, asset.currency, "detail") : "—"}
-                      </Td>
-                      <Td className="text-(--color-text-secondary)">
-                        {t.note ?? <span className="text-(--color-text-tertiary)">—</span>}
-                      </Td>
+                      {txColOrder.map((k) => {
+                        if (!txCols[k]) return null;
+                        switch (k) {
+                          case "type":
+                            return (
+                              <Td key={k}>
+                                <span className={`text-xs font-medium ${typeColor}`}>
+                                  {typeLabel}
+                                </span>
+                              </Td>
+                            );
+                          case "qty":
+                            return (
+                              <Td key={k} align="right" className="tabular">
+                                {formatNumber(t.quantity, "detail")}
+                              </Td>
+                            );
+                          case "price":
+                            return (
+                              <Td key={k} align="right" className="tabular">
+                                {t.price > 0
+                                  ? formatCurrency(t.price, asset.currency, "detail")
+                                  : "—"}
+                              </Td>
+                            );
+                          case "fee":
+                            return (
+                              <Td key={k} align="right" className="tabular text-(--color-text-tertiary)">
+                                {t.fee > 0 ? formatCurrency(t.fee, asset.currency, "detail") : "—"}
+                              </Td>
+                            );
+                          case "platform":
+                            return (
+                              <Td key={k}>
+                                {t.platform ? (
+                                  <span className="rounded bg-(--color-bg-base) px-1.5 py-0.5 text-[11px] font-medium tracking-wide text-(--color-text-secondary)">
+                                    {t.platform}
+                                  </span>
+                                ) : (
+                                  <span className="text-xs text-(--color-text-tertiary)">—</span>
+                                )}
+                              </Td>
+                            );
+                          case "yield":
+                            return (
+                              <Td key={k} align="right" className="tabular text-(--color-text-tertiary)">
+                                {t.expected_yield_pct != null
+                                  ? `${t.expected_yield_pct.toFixed(2)}%`
+                                  : "—"}
+                              </Td>
+                            );
+                          case "note":
+                            return (
+                              <Td key={k} className="text-(--color-text-secondary)">
+                                {t.note ?? <span className="text-(--color-text-tertiary)">—</span>}
+                              </Td>
+                            );
+                        }
+                      })}
                       <Td>
                         <div className="flex items-center justify-end gap-1">
                           <button

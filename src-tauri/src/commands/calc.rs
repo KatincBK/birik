@@ -33,6 +33,10 @@ pub struct PositionSummary {
     /// `Some(x)` = tüm buy tx'lerinin fx_to_usd'si var, USD bazında doğru.
     /// `None` = en az bir buy lock'sız → display tarafı current FX ile fallback yapsın.
     pub total_cost_usd_locked: Option<f64>,
+    /// Cost-weighted ortalama tx-level yield (%). Asset.expected_yield_pct
+    /// yerine kullanılır — pasif gelir hesabında daha doğru. NULL = hiçbir tx
+    /// yield set'lememiş, asset-level fallback.
+    pub weighted_yield_pct: Option<f64>,
 }
 
 /// Bir asset'in işlemlerinden pozisyon özeti çıkarır.
@@ -57,6 +61,10 @@ pub fn position_from_transactions(txns: &[Transaction]) -> PositionSummary {
     let mut cost_usd_locked = 0.0;
     let mut all_buys_have_lock = true;
     let mut had_any_buy = false;
+    // Yield-weighted ortalama: cost-basis ağırlıklı
+    let mut yield_weighted_sum = 0.0;
+    let mut yield_weighted_total = 0.0;
+    let mut had_any_yield = false;
 
     for t in sorted {
         match t.tx_type.as_str() {
@@ -74,6 +82,12 @@ pub fn position_from_transactions(txns: &[Transaction]) -> PositionSummary {
                         all_buys_have_lock = false;
                     }
                 }
+                // Yield weighted (cost-basis ağırlıklı)
+                yield_weighted_total += cost;
+                if let Some(y) = t.expected_yield_pct {
+                    yield_weighted_sum += cost * y;
+                    had_any_yield = true;
+                }
             }
             "sell" => {
                 let avg = if s.balance > 0.0 {
@@ -83,10 +97,14 @@ pub fn position_from_transactions(txns: &[Transaction]) -> PositionSummary {
                 };
                 let realized = (t.price - avg) * t.quantity - t.fee;
                 s.realized_pl += realized;
-                // USD-locked oransal düşüm — sell tx'ten önceki balance üzerinden
-                if s.balance > 0.0 && all_buys_have_lock {
-                    let avg_usd = cost_usd_locked / s.balance;
-                    cost_usd_locked -= avg_usd * t.quantity;
+                // USD-locked + yield oransal düşüm — sell tx'ten önceki balance üzerinden
+                if s.balance > 0.0 {
+                    let frac = t.quantity / s.balance;
+                    if all_buys_have_lock {
+                        cost_usd_locked -= cost_usd_locked * frac;
+                    }
+                    yield_weighted_sum -= yield_weighted_sum * frac;
+                    yield_weighted_total -= yield_weighted_total * frac;
                 }
                 s.total_cost -= avg * t.quantity;
                 s.balance -= t.quantity;
@@ -95,6 +113,8 @@ pub fn position_from_transactions(txns: &[Transaction]) -> PositionSummary {
                     s.balance = 0.0;
                     s.total_cost = 0.0;
                     cost_usd_locked = 0.0;
+                    yield_weighted_sum = 0.0;
+                    yield_weighted_total = 0.0;
                 }
             }
             "passive_income" => {
@@ -112,6 +132,11 @@ pub fn position_from_transactions(txns: &[Transaction]) -> PositionSummary {
     };
     s.total_cost_usd_locked = if had_any_buy && all_buys_have_lock {
         Some(cost_usd_locked)
+    } else {
+        None
+    };
+    s.weighted_yield_pct = if had_any_yield && yield_weighted_total > 0.0 {
+        Some(yield_weighted_sum / yield_weighted_total)
     } else {
         None
     };
@@ -349,7 +374,7 @@ pub async fn calculate_portfolio_inner(
             asset_type: a.asset_type.clone(),
             asset_currency: a.currency.clone(),
             icon_url: a.icon_url.clone(),
-            expected_yield_pct: a.expected_yield_pct,
+            expected_yield_pct: pos.weighted_yield_pct.or(a.expected_yield_pct),
             platform: a.platform.clone(),
             platforms: platforms.clone(),
             balance: pos.balance,
@@ -556,7 +581,7 @@ fn period_to_from(period: &str) -> Option<i64> {
 
 async fn load_transactions(pool: &SqlitePool, asset_id: i64) -> AppResult<Vec<Transaction>> {
     let rows: Vec<Transaction> = sqlx::query_as(
-        "SELECT id, asset_id, date, type, source, quantity, price, fee, note, is_deleted, created_at, fx_to_usd, platform
+        "SELECT id, asset_id, date, type, source, quantity, price, fee, note, is_deleted, created_at, fx_to_usd, platform, expected_yield_pct
          FROM transactions WHERE asset_id = ? AND is_deleted = 0",
     )
     .bind(asset_id)
@@ -678,6 +703,7 @@ mod tests {
             created_at: 0,
             fx_to_usd: None,
             platform: None,
+            expected_yield_pct: None,
         }
     }
 

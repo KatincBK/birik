@@ -1,5 +1,6 @@
 import { useState, useEffect } from "react";
 import { usePortfolioStore } from "../stores/portfolioStore";
+import { PlatformChipList } from "./PlatformChipList";
 import { motion, AnimatePresence } from "framer-motion";
 import { toast } from "sonner";
 import { ChevronDown, X, Info } from "lucide-react";
@@ -48,8 +49,13 @@ export function EditTransactionModal({
 }) {
   const [quantity, setQuantity] = useState(tx.quantity.toString());
   const [price, setPrice] = useState(tx.price.toString());
+  // Yield öncelik: tx.expected_yield_pct > asset.expected_yield_pct (fallback)
   const [yieldPct, setYieldPct] = useState(
-    asset.expected_yield_pct != null ? asset.expected_yield_pct.toString() : ""
+    tx.expected_yield_pct != null
+      ? tx.expected_yield_pct.toString()
+      : asset.expected_yield_pct != null
+      ? asset.expected_yield_pct.toString()
+      : ""
   );
 
   const [advancedOpen, setAdvancedOpen] = useState(false);
@@ -60,6 +66,7 @@ export function EditTransactionModal({
   const [tags, setTags] = useState<string[]>([]);
   const [platform, setPlatform] = useState(tx.platform ?? "");
   const [platformFocused, setPlatformFocused] = useState(false);
+  const [platformExpanded, setPlatformExpanded] = useState(false);
 
   const [submitting, setSubmitting] = useState(false);
   const [shakeKey, setShakeKey] = useState(0);
@@ -127,6 +134,8 @@ export function EditTransactionModal({
 
     setSubmitting(true);
     try {
+      // Yield artık işlem-level — tx.expected_yield_pct olarak gönderilir,
+      // asset.expected_yield_pct'e dokunulmaz.
       await api.updateTransaction({
         id: tx.id,
         date: dateInputToUnix(date),
@@ -136,18 +145,10 @@ export function EditTransactionModal({
         note: note.trim() || null,
         tags,
         platform: platform.trim() || null,
+        expectedYieldPct: yieldVal,
       });
-      // Yield değiştiyse asset'e yaz
-      const currentYield = asset.expected_yield_pct ?? null;
-      const yieldChanged =
-        (yieldVal === null && currentYield !== null) ||
-        (yieldVal !== null && (currentYield === null || Math.abs(yieldVal - currentYield) > 1e-9));
-      if (yieldChanged) {
-        await api.updateAssetYield(asset.id, yieldVal).catch(() => {});
-        refreshAssets(asset.portfolio_id).catch(() => {});
-      }
-
       await refreshTxns(asset.id);
+      refreshAssets(asset.portfolio_id).catch(() => {});
       recompute(asset.portfolio_id, displayCurrency).catch(() => {});
       playSound("ding");
       toast.success("İşlem güncellendi");
@@ -222,24 +223,13 @@ export function EditTransactionModal({
                     transition={{ duration: 0.18, ease: [0.16, 1, 0.3, 1] }}
                     className="overflow-hidden"
                   >
-                    <div className="mt-1.5 flex flex-wrap gap-1">
-                      {knownPlatforms.map((p) => (
-                        <button
-                          key={p}
-                          type="button"
-                          onMouseDown={(e) => e.preventDefault()}
-                          onClick={() => setPlatform(p)}
-                          className={cn(
-                            "rounded-md border px-2 py-0.5 text-[11px] transition-colors",
-                            platform === p
-                              ? "border-(--color-accent)/40 bg-(--color-accent)/15 text-(--color-accent)"
-                              : "border-(--color-border-subtle) bg-(--color-bg-base) text-(--color-text-secondary) hover:border-(--color-accent)/40 hover:text-(--color-accent)"
-                          )}
-                        >
-                          {p}
-                        </button>
-                      ))}
-                    </div>
+                    <PlatformChipList
+                      items={knownPlatforms}
+                      value={platform}
+                      onSelect={setPlatform}
+                      expanded={platformExpanded}
+                      onToggleExpand={() => setPlatformExpanded((v) => !v)}
+                    />
                   </motion.div>
                 )}
               </AnimatePresence>

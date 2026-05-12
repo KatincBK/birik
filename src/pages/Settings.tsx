@@ -40,6 +40,44 @@ export function Settings() {
 
   const [busy, setBusy] = useState<string | null>(null);
 
+  // Hedef ETA hesabı için büyüme tahmini ayarları
+  const [growthMode, setGrowthMode] = useState<
+    "auto" | "from_investments" | "custom"
+  >("auto");
+  const [customGrowthPct, setCustomGrowthPct] = useState("8");
+  useEffect(() => {
+    api
+      .getSetting("growth_estimate_mode")
+      .then((v) => {
+        if (v === "auto" || v === "from_investments" || v === "custom") {
+          setGrowthMode(v);
+        }
+      })
+      .catch(() => {});
+    api
+      .getSetting("custom_growth_pct_yearly")
+      .then((v) => {
+        if (v != null && v !== "") setCustomGrowthPct(v);
+      })
+      .catch(() => {});
+  }, []);
+  const setMode = async (m: "auto" | "from_investments" | "custom") => {
+    setGrowthMode(m);
+    await api.setSetting("growth_estimate_mode", m).catch(() => {});
+    playSound("click");
+  };
+  const saveCustomGrowth = async () => {
+    const parsed = parseFloat(customGrowthPct.replace(",", "."));
+    if (!Number.isFinite(parsed)) {
+      toast.error("Geçerli bir yüzde gir");
+      playSound("error");
+      return;
+    }
+    await api.setSetting("custom_growth_pct_yearly", parsed.toString());
+    playSound("ding");
+    toast.success(`Yıllık büyüme tahmini: %${parsed}`);
+  };
+
   // Finnhub API key — DB'de saklanıyor, boot'ta load et
   const [finnhubKey, setFinnhubKey] = useState("");
   const [finnhubKeyVisible, setFinnhubKeyVisible] = useState(false);
@@ -277,6 +315,73 @@ export function Settings() {
             </div>
           }
         />
+      </Section>
+
+      <Section title="Hedef büyüme tahmini">
+        <Row
+          label="Tahmin kaynağı"
+          hint="Hedefe kalan süre hesabında kullanılan yıllık sermaye büyüme oranı. Pasif gelir (asset yield) ayrıca eklenir."
+          right={
+            <div className="flex gap-1 rounded-lg border border-(--color-border-subtle) bg-(--color-bg-base) p-1">
+              {(
+                [
+                  { k: "auto", label: "Otomatik" },
+                  { k: "from_investments", label: "Yatırım kayıtları" },
+                  { k: "custom", label: "Custom" },
+                ] as const
+              ).map((opt) => (
+                <button
+                  key={opt.k}
+                  onClick={() => setMode(opt.k)}
+                  className={cn(
+                    "rounded-md px-3 py-1 text-xs font-medium transition-colors",
+                    growthMode === opt.k
+                      ? "bg-(--color-bg-hover) text-(--color-text-primary)"
+                      : "text-(--color-text-secondary) hover:text-(--color-text-primary)"
+                  )}
+                >
+                  {opt.label}
+                </button>
+              ))}
+            </div>
+          }
+        />
+        {growthMode === "auto" && (
+          <p className="text-xs text-(--color-text-tertiary)">
+            Portföyün tarihsel CAGR'ı (cost-weighted) varsa kullanılır; yeterli
+            veri yoksa <span className="tabular text-(--color-text-secondary)">%8</span> baseline.
+          </p>
+        )}
+        {growthMode === "from_investments" && (
+          <p className="text-xs text-(--color-warning)">
+            Doğru veri için "Yatırım" sekmesindeki kayıtların her aya ait olduğundan
+            emin ol. Eksik kayıt → büyüme oranı yanıltıcı olur.
+          </p>
+        )}
+        {growthMode === "custom" && (
+          <Row
+            label="Yıllık büyüme (%)"
+            hint="Senin beklentin. SP500 ortalaması ≈ %10, BIST 100 ≈ %30 (TL bazlı)."
+            right={
+              <div className="flex items-center gap-2">
+                <input
+                  inputMode="decimal"
+                  value={customGrowthPct}
+                  onChange={(e) => setCustomGrowthPct(e.target.value)}
+                  className="w-20 rounded-lg border border-(--color-border-subtle) bg-(--color-bg-base) px-2 py-1 text-right text-sm tabular outline-none focus:border-(--color-accent)"
+                />
+                <span className="text-sm text-(--color-text-tertiary)">% / yıl</span>
+                <button
+                  onClick={saveCustomGrowth}
+                  className={`${buttonSecondary} inline-flex items-center gap-1.5`}
+                >
+                  <Save className="h-3.5 w-3.5" />
+                  Kaydet
+                </button>
+              </div>
+            }
+          />
+        )}
       </Section>
 
       <Section title="Veri kaynakları">

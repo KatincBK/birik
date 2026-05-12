@@ -75,6 +75,7 @@ async fn ensure_columns(pool: &SqlitePool) -> AppResult<()> {
         ("transactions", "fx_to_usd", "REAL"),
         ("assets", "platform", "TEXT"),
         ("transactions", "platform", "TEXT"),
+        ("transactions", "expected_yield_pct", "REAL"),
     ];
 
     for (table, column, def) in required {

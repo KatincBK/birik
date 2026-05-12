@@ -1,5 +1,6 @@
 import { useState, useEffect } from "react";
 import { usePortfolioStore } from "../stores/portfolioStore";
+import { PlatformChipList } from "./PlatformChipList";
 
 const LAST_PLATFORM_KEY = "birik.lastPlatform";
 import { motion, AnimatePresence } from "framer-motion";
@@ -59,6 +60,7 @@ export function AddTransactionModal({ asset }: { asset: Asset }) {
     () => asset.platform ?? localStorage.getItem(LAST_PLATFORM_KEY) ?? ""
   );
   const [platformFocused, setPlatformFocused] = useState(false);
+  const [platformExpanded, setPlatformExpanded] = useState(false);
 
   const [submitting, setSubmitting] = useState(false);
   const [shakeKey, setShakeKey] = useState(0);
@@ -112,21 +114,9 @@ export function AddTransactionModal({ asset }: { asset: Asset }) {
   ) => {
     setSubmitting(true);
     try {
-      // İşlem yarat
+      // Yield artık işlem-level (tx.expected_yield_pct); args içinde gönderilir
       await create(args);
-
-      // Yield güncellemesi (kullanıcı değiştirdiyse)
-      const yieldVal = yieldPct.trim() === "" ? null : parseDecimal(yieldPct);
-      const currentYield = asset.expected_yield_pct ?? null;
-      const yieldChanged =
-        (yieldVal === null && currentYield !== null) ||
-        (yieldVal !== null && (currentYield === null || Math.abs(yieldVal - currentYield) > 1e-9));
-      if (yieldChanged) {
-        await api
-          .updateAssetYield(asset.id, yieldVal)
-          .then(() => refreshAssets(asset.portfolio_id))
-          .catch(() => {});
-      }
+      await refreshAssets(asset.portfolio_id).catch(() => {});
 
       toast.success("İşlem kaydedildi");
       playSound("ding");
@@ -184,6 +174,7 @@ export function AddTransactionModal({ asset }: { asset: Asset }) {
       note: note.trim() || null,
       tags: tags.length > 0 ? tags : null,
       platform: platformClean,
+      expectedYieldPct: yieldVal,
     };
 
     // Satış ise validate
@@ -303,24 +294,13 @@ export function AddTransactionModal({ asset }: { asset: Asset }) {
                     transition={{ duration: 0.18, ease: [0.16, 1, 0.3, 1] }}
                     className="overflow-hidden"
                   >
-                    <div className="mt-1.5 flex flex-wrap gap-1">
-                      {knownPlatforms.map((p) => (
-                        <button
-                          key={p}
-                          type="button"
-                          onMouseDown={(e) => e.preventDefault()}
-                          onClick={() => setPlatform(p)}
-                          className={cn(
-                            "rounded-md border px-2 py-0.5 text-[11px] transition-colors",
-                            platform === p
-                              ? "border-(--color-accent)/40 bg-(--color-accent)/15 text-(--color-accent)"
-                              : "border-(--color-border-subtle) bg-(--color-bg-base) text-(--color-text-secondary) hover:border-(--color-accent)/40 hover:text-(--color-accent)"
-                          )}
-                        >
-                          {p}
-                        </button>
-                      ))}
-                    </div>
+                    <PlatformChipList
+                      items={knownPlatforms}
+                      value={platform}
+                      onSelect={setPlatform}
+                      expanded={platformExpanded}
+                      onToggleExpand={() => setPlatformExpanded((v) => !v)}
+                    />
                   </motion.div>
                 )}
               </AnimatePresence>

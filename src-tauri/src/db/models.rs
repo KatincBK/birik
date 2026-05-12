@@ -95,6 +95,8 @@ pub struct Transaction {
     pub fx_to_usd: Option<f64>,
     /// Bu işlemin yapıldığı platform/borsa (opsiyonel)
     pub platform: Option<String>,
+    /// Bu pozisyonun yıllık beklenen faiz/yield oranı (%). NULL = asset.expected_yield_pct fallback
+    pub expected_yield_pct: Option<f64>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, FromRow)]

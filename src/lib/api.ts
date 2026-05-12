@@ -456,6 +456,7 @@ export const api = {
     note?: string | null;
     tags?: string[] | null;
     platform?: string | null;
+    expectedYieldPct?: number | null;
   }) =>
     invoke<Transaction>("create_transaction", {
       assetId: args.assetId,
@@ -468,6 +469,7 @@ export const api = {
       note: args.note ?? null,
       tags: args.tags ?? null,
       platform: args.platform ?? null,
+      expectedYieldPct: args.expectedYieldPct ?? null,
     }),
   listTransactions: (
     assetId: number,
@@ -492,6 +494,7 @@ export const api = {
     note?: string | null;
     tags?: string[] | null;
     platform?: string | null;
+    expectedYieldPct?: number | null;
   }) =>
     invoke<Transaction>("update_transaction", {
       id: args.id,
@@ -502,6 +505,7 @@ export const api = {
       note: args.note ?? null,
       tags: args.tags ?? null,
       platform: args.platform ?? null,
+      expectedYieldPct: args.expectedYieldPct ?? null,
     }),
   softDeleteTransaction: (id: number) =>
     invoke<void>("soft_delete_transaction", { id }),

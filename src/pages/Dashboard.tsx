@@ -123,7 +123,7 @@ export function Dashboard({ activeId }: { activeId: number | null }) {
         displayCurrency={displayCurrency}
       />
 
-      <div className="grid gap-6 lg:grid-cols-[280px_1fr]">
+      <div className="grid gap-6 md:grid-cols-[240px_1fr] xl:grid-cols-[280px_1fr]">
         <div className="rounded-xl border border-(--color-border-subtle) bg-(--color-bg-panel) p-4">
           <div className="mb-3 flex items-center justify-between gap-2">
             <h3 className="text-[11px] font-medium tracking-[0.05em] text-(--color-text-secondary) uppercase">
