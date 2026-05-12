@@ -266,7 +266,14 @@ pub async fn calculate_portfolio_inner(
 
     // FX rate'leri cache'siz çekme — display currency conversion gerekirse.
     // Bu pahalı olduğu için ihtiyaç olduğunda bir kez çek.
+    //
+    // Not: fx/commodity asset'lerinin cached fiyatı TCMB'den TRY cinsinden
+    // geldiği için, asset.currency display ile eşleşse bile price_currency
+    // (TRY) → display dönüşümü gerekebilir. Bu yüzden tipe de bak.
     let needs_fx = assets.iter().any(|a| !a.currency.eq_ignore_ascii_case(&display_currency))
+        || assets
+            .iter()
+            .any(|a| a.asset_type == "fx" || a.asset_type == "commodity")
         || matches!(display_currency.as_str(), "BTC" | "ETH");
     let fx = if needs_fx {
         let mut rates = crate::services::fx::fetch_rates().await?;

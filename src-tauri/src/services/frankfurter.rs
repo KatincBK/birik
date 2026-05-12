@@ -26,6 +26,38 @@ const URL: &str = "https://api.frankfurter.dev/latest?base=TRY";
 static HISTORICAL_CACHE: Lazy<Mutex<HashMap<String, HashMap<String, f64>>>> =
     Lazy::new(|| Mutex::new(HashMap::new()));
 
+/// Desteklenen para birimleri cache'i (kod → tam isim). Frankfurter /currencies.
+static CURRENCIES_CACHE: Lazy<Mutex<Option<Vec<(String, String)>>>> =
+    Lazy::new(|| Mutex::new(None));
+
+/// Tüm desteklenen para birimlerini Frankfurter'dan çek. Cache'li.
+/// Dönüş: `[(code, full_name), ...]` örn `("USD", "United States Dollar")`.
+pub async fn list_supported_currencies() -> AppResult<Vec<(String, String)>> {
+    {
+        let cache = CURRENCIES_CACHE.lock().unwrap();
+        if let Some(v) = cache.as_ref() {
+            return Ok(v.clone());
+        }
+    }
+    let url = "https://api.frankfurter.dev/currencies";
+    let resp = HTTP.get(url).send().await?;
+    if !resp.status().is_success() {
+        return Err(AppError::external(format!(
+            "Frankfurter /currencies HTTP {}",
+            resp.status()
+        )));
+    }
+    let map: HashMap<String, String> = resp.json().await?;
+    let mut out: Vec<(String, String)> =
+        map.into_iter().map(|(k, v)| (k.to_uppercase(), v)).collect();
+    out.sort_by(|a, b| a.0.cmp(&b.0));
+    {
+        let mut cache = CURRENCIES_CACHE.lock().unwrap();
+        *cache = Some(out.clone());
+    }
+    Ok(out)
+}
+
 #[derive(Debug, Deserialize)]
 struct FrankfurterResponse {
     #[allow(dead_code)]

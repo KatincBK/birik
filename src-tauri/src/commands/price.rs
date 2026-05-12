@@ -158,10 +158,35 @@ pub async fn refresh_all_prices(
                                 change_24h_pct: r.usd_24h_change,
                             },
                             Err(cg_err) => {
-                                return Err(AppError::external(format!(
-                                    "Binance + CoinGecko ikisi de fail ({}). Binance: {}; CoinGecko: {}",
-                                    asset.symbol, binance_err, cg_err
-                                )));
+                                // Son fallback: Yahoo'da kripto'lar `<SYM>-USD`
+                                // formatında tutuluyor (örn HYPE-USD, BTC-USD).
+                                // Binance'te olmayan yeni token'lar için
+                                // hayat kurtarıyor.
+                                let y_sym = format!("{}-USD", asset.symbol.to_uppercase());
+                                match yahoo::fetch_price(&y_sym).await {
+                                    Ok(r) => {
+                                        let pct = match r.previous_close {
+                                            Some(prev) if prev > 0.0 => {
+                                                Some((r.price - prev) / prev * 100.0)
+                                            }
+                                            _ => None,
+                                        };
+                                        PriceResult {
+                                            price: r.price,
+                                            currency: "USD".into(),
+                                            source: "yahoo".into(),
+                                            cache_hit: false,
+                                            fetched_at: crate::commands::now_secs(),
+                                            change_24h_pct: pct,
+                                        }
+                                    }
+                                    Err(y_err) => {
+                                        return Err(AppError::external(format!(
+                                            "Binance + CoinGecko + Yahoo üçü de fail ({}). Binance: {}; CoinGecko: {}; Yahoo: {}",
+                                            asset.symbol, binance_err, cg_err, y_err
+                                        )));
+                                    }
+                                }
                             }
                         }
                     }

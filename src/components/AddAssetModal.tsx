@@ -124,11 +124,6 @@ export function AddAssetModal({ portfolioId }: { portfolioId: number }) {
   const [recent, setRecent] = useState<SearchHit[]>(() => loadRecentSearches());
   const [searching, setSearching] = useState(false);
 
-  // Manuel (fx/commodity) için
-  const [manualSymbol, setManualSymbol] = useState("");
-  const [manualName, setManualName] = useState("");
-  const [manualCurrency, setManualCurrency] = useState("TRY");
-
   // Seçilen asset bilgisi (henüz DB'ye yazılmadı; form aşamasında kullanılır)
   const [pickedHit, setPickedHit] = useState<SearchHit | null>(null);
   const [pickedCurrency, setPickedCurrency] = useState<string>("USD");
@@ -172,7 +167,10 @@ export function AddAssetModal({ portfolioId }: { portfolioId: number }) {
   const displayCurrency = useSettingsStore((s) => s.displayCurrency);
 
   const isAutocomplete =
-    pickerType === "crypto" || pickerType === "stock" || pickerType === "all";
+    pickerType === "crypto" ||
+    pickerType === "stock" ||
+    pickerType === "commodity" ||
+    pickerType === "all";
 
   /* Search effect — "all" iki fetcher paralel */
   useEffect(() => {
@@ -180,7 +178,9 @@ export function AddAssetModal({ portfolioId }: { portfolioId: number }) {
       setHits([]);
       return;
     }
-    if (debounced.trim().length < 2) {
+    // Commodity için sıfır karakterde de tüm katalog gösterilsin
+    // (kullanıcı dropdown gibi tarayabilsin).
+    if (pickerType !== "commodity" && debounced.trim().length < 2) {
       setHits([]);
       return;
     }
@@ -216,6 +216,18 @@ export function AddAssetModal({ portfolioId }: { portfolioId: number }) {
           .catch((err) => ({
             hits: [],
             source: "stock",
+            error: err instanceof Error ? err.message : String(err),
+          }))
+      );
+    }
+    if (pickerType === "commodity") {
+      fetches.push(
+        api
+          .searchSymbol(debounced, "commodity")
+          .then((hits) => ({ hits, source: "commodity" }))
+          .catch((err) => ({
+            hits: [],
+            source: "commodity",
             error: err instanceof Error ? err.message : String(err),
           }))
       );
@@ -307,6 +319,10 @@ export function AddAssetModal({ portfolioId }: { portfolioId: number }) {
           const sym = pickedHit.external_id ?? pickedHit.symbol;
           const p = await api.fetchStockPriceYahoo(sym);
           if (!cancelled && p.price > 0) setPrice(p.price.toString());
+        } else if (pickedAssetType === "fx") {
+          // Bir para birimi kendi biriminde her zaman 1 değerinde.
+          // TRY karşılığı tx-level fx_to_usd lock ile takip ediliyor.
+          if (!cancelled) setPrice("1");
         }
       } catch {
         // sessizce başarısız — kullanıcı manuel girer
@@ -322,10 +338,12 @@ export function AddAssetModal({ portfolioId }: { portfolioId: number }) {
     saveRecentSearch(hit);
     setRecent(loadRecentSearches());
     setPickedHit(hit);
-    const t: AssetTypeKey =
-      hit.asset_type === "stock" ? "stock" : "crypto";
+    // asset_type backend'den geliyor — direkt kullan (crypto/stock/fx/commodity).
+    const t = hit.asset_type as AssetTypeKey;
     setPickedAssetType(t);
-    setPickedCurrency("USD");
+    // Para birimi otomatik: fx → kendisi, diğerleri USD.
+    // (Sessizce dolduruluyor; kullanıcıya soru sorulmuyor.)
+    setPickedCurrency(t === "fx" ? hit.symbol.toUpperCase() : "USD");
     setStage("form");
 
     // Hisse ise Finnhub'tan dividend yield çek (key set'liyse) → form default
@@ -341,26 +359,6 @@ export function AddAssetModal({ portfolioId }: { portfolioId: number }) {
     }
   };
 
-  const onPickManual = () => {
-    const sym = manualSymbol.trim().toUpperCase();
-    const nm = manualName.trim() || sym;
-    if (!sym) {
-      playSound("error");
-      toast.error("Sembol gerekli");
-      return;
-    }
-    setPickedHit({
-      external_id: sym,
-      symbol: sym,
-      name: nm,
-      icon: null,
-      asset_type: "commodity",
-      exchange: null,
-    });
-    setPickedAssetType("commodity");
-    setPickedCurrency(manualCurrency.toUpperCase());
-    setStage("form");
-  };
 
   const triggerShake = () => {
     playSound("error");
@@ -509,58 +507,33 @@ export function AddAssetModal({ portfolioId }: { portfolioId: number }) {
         </Field>
 
         <div className="mt-5">
-          {isAutocomplete ? (
-            <Field
-              label="Ara"
-              hint={
-                pickerType === "all"
-                  ? "Kripto + hisse aynı anda — yazmaya başla"
-                  : pickerType === "crypto"
-                  ? "CoinGecko'dan ara (örn: bitcoin, eth, sol)"
-                  : "Yahoo Finance'tan ara (örn: AAPL, NVDA, TSLA)"
-              }
-            >
-              <div className="relative">
-                <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-(--color-text-tertiary)" />
-                <input
-                  autoFocus
-                  value={query}
-                  onChange={(e) => setQuery(e.target.value)}
-                  placeholder="Yazmaya başla…"
-                  className={cn(inputClass, "pl-9")}
-                />
-              </div>
-            </Field>
-          ) : (
-            <div className="space-y-3">
-              <Field
-                label="Sembol"
-                hint="USD, EUR, GBP, JPY, XAU (gram altın), CHF, CAD…"
-              >
-                <input
-                  autoFocus
-                  value={manualSymbol}
-                  onChange={(e) => setManualSymbol(e.target.value)}
-                  className={inputClass}
-                />
-              </Field>
-              <Field label="İsim">
-                <input
-                  value={manualName}
-                  onChange={(e) => setManualName(e.target.value)}
-                  placeholder="örn: ABD Doları, Gram Altın"
-                  className={inputClass}
-                />
-              </Field>
-              <Field label="Para birimi" hint="TCMB üzerinden bu birimden TRY karşılığı çekilir">
-                <input
-                  value={manualCurrency}
-                  onChange={(e) => setManualCurrency(e.target.value)}
-                  className={inputClass}
-                />
-              </Field>
+          <Field
+            label="Ara"
+            hint={
+              pickerType === "all"
+                ? "Kripto + hisse aynı anda — yazmaya başla"
+                : pickerType === "crypto"
+                ? "CoinGecko'dan ara (örn: bitcoin, eth, sol)"
+                : pickerType === "stock"
+                ? "Yahoo Finance'tan ara (örn: AAPL, NVDA, TSLA)"
+                : "Döviz ve kıymetli metaller — boş bırakırsan tüm liste"
+            }
+          >
+            <div className="relative">
+              <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-(--color-text-tertiary)" />
+              <input
+                autoFocus
+                value={query}
+                onChange={(e) => setQuery(e.target.value)}
+                placeholder={
+                  pickerType === "commodity"
+                    ? "USD, EUR, altın…"
+                    : "Yazmaya başla…"
+                }
+                className={cn(inputClass, "pl-9")}
+              />
             </div>
-          )}
+          </Field>
         </div>
 
         {isAutocomplete && (
@@ -572,7 +545,7 @@ export function AddAssetModal({ portfolioId }: { portfolioId: number }) {
                 <Skeleton className="h-10 w-full" />
               </div>
             )}
-            {!searching && debounced.trim().length < 2 && (
+            {!searching && debounced.trim().length < 2 && pickerType !== "commodity" && (
               recent.length > 0 ? (
                 <div>
                   <div className="border-b border-(--color-border-subtle) bg-(--color-bg-base)/40 px-4 py-2 text-[10px] font-medium tracking-[0.06em] text-(--color-text-tertiary) uppercase">
@@ -610,17 +583,23 @@ export function AddAssetModal({ portfolioId }: { portfolioId: number }) {
                 </p>
               )
             )}
-            {!searching && debounced.trim().length >= 2 && hits.length === 0 && (
-              <div className="px-4 py-6 text-center">
-                <p className="text-sm text-(--color-text-tertiary)">
-                  Aradığın sembol bulunamadı.
-                </p>
-                <p className="mt-1 text-xs text-(--color-text-tertiary)">
-                  Sembolü biliyorsan direkt yaz — örn. <span className="tabular">MSFT</span>,{" "}
-                  <span className="tabular">NVDA</span>, <span className="tabular">btc</span>.
-                </p>
-              </div>
-            )}
+            {!searching &&
+              hits.length === 0 &&
+              (debounced.trim().length >= 2 || pickerType === "commodity") && (
+                <div className="px-4 py-6 text-center">
+                  <p className="text-sm text-(--color-text-tertiary)">
+                    {pickerType === "commodity"
+                      ? "Eşleşen para birimi veya emtia yok."
+                      : "Aradığın sembol bulunamadı."}
+                  </p>
+                  {pickerType !== "commodity" && (
+                    <p className="mt-1 text-xs text-(--color-text-tertiary)">
+                      Sembolü biliyorsan direkt yaz — örn. <span className="tabular">MSFT</span>,{" "}
+                      <span className="tabular">NVDA</span>, <span className="tabular">btc</span>.
+                    </p>
+                  )}
+                </div>
+              )}
             {!searching && hits.length > 0 && (
               <ul>
                 {hits.map((h) => (
@@ -639,7 +618,15 @@ export function AddAssetModal({ portfolioId }: { portfolioId: number }) {
                         <div className="flex items-center gap-2">
                           <span className="text-sm font-medium tabular">{h.symbol}</span>
                           <span className="text-[10px] uppercase tracking-wide text-(--color-text-tertiary)">
-                            {h.asset_type === "stock" ? "Hisse" : h.asset_type === "crypto" ? "Kripto" : ""}
+                            {h.asset_type === "stock"
+                              ? "Hisse"
+                              : h.asset_type === "crypto"
+                              ? "Kripto"
+                              : h.asset_type === "fx"
+                              ? "Döviz"
+                              : h.asset_type === "commodity"
+                              ? "Emtia"
+                              : ""}
                           </span>
                           {h.exchange && (
                             <span className="text-[11px] text-(--color-text-tertiary)">
@@ -660,16 +647,6 @@ export function AddAssetModal({ portfolioId }: { portfolioId: number }) {
           </div>
         )}
 
-        {!isAutocomplete && (
-          <div className="mt-5 flex justify-end gap-2">
-            <button onClick={closeModal} className={buttonGhost}>
-              İptal
-            </button>
-            <button onClick={onPickManual} className={buttonPrimary}>
-              İleri
-            </button>
-          </div>
-        )}
       </ModalShell>
     );
   }
