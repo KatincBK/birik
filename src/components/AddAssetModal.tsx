@@ -431,7 +431,7 @@ export function AddAssetModal({ portfolioId }: { portfolioId: number }) {
         } catch {}
       }
 
-      // Transaction'ı yaz
+      // Transaction'ı yaz — platform da geç ki tx-derived listeye dahil olsun
       await createTx({
         assetId: asset.id,
         date: dateInputToUnix(date),
@@ -442,6 +442,8 @@ export function AddAssetModal({ portfolioId }: { portfolioId: number }) {
         fee: f,
         note: note.trim() || null,
         tags: tags.length > 0 ? tags : null,
+        platform: trimmedPlatform || null,
+        expectedYieldPct: yieldVal,
       });
 
       // Yield güncelle (mevcut asset'in null'ı varsa veya kullanıcı override

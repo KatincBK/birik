@@ -105,6 +105,8 @@ export type Transaction = {
   fx_to_usd: number | null;
   /** Opsiyonel: işlemin yapıldığı platform/borsa */
   platform: string | null;
+  /** Opsiyonel: işlem bazında beklenen yıllık getiri yüzdesi (staking/faiz) */
+  expected_yield_pct: number | null;
 };
 
 export type CryptoPrice = {
@@ -154,6 +156,9 @@ export type AssetStats = {
   /** Transactions'tan derive edilen distinct platform listesi. 1+ olduğunda
    *  Çeşitli göstergesi UI'da kullanılır. */
   platforms: string[];
+  /** "Hepsi" görünümünde farklı portföylerden gelen aynı sembolün ham
+   * alt-asset'leri. Frontend'de hesaplanır; backend'den gelmez. */
+  members?: AssetStats[];
   balance: number;
   avg_cost: number;
   current_price: number | null;

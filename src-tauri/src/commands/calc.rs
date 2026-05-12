@@ -292,28 +292,33 @@ pub async fn calculate_portfolio_inner(
         let txns = load_transactions(pool, a.id).await?;
         let pos = position_from_transactions(&txns);
 
-        // Bu asset'in transactions'ında geçen distinct platformlar
-        let mut platform_set: std::collections::HashSet<String> =
-            std::collections::HashSet::new();
+        // Platformlar tamamen transaction'lardan türetilir:
+        //   buy / passive_income  → +qty
+        //   sell                  → -qty
+        // Her tx kendi platformunu taşır. Bir platformda net qty > 0 ise
+        // listede yer alır. Sıfırlanan platform otomatik düşer. Asset-level
+        // `asset.platform` artık platform listesi için referans değil
+        // (varsayılan değer olarak yeni tx ekleme modal'ında kullanılabilir).
+        let mut per_platform: std::collections::HashMap<String, f64> =
+            std::collections::HashMap::new();
         for t in &txns {
-            if let Some(p) = &t.platform {
-                let trimmed = p.trim();
-                if !trimmed.is_empty() {
-                    platform_set.insert(trimmed.to_string());
-                }
-            }
+            let plat = match t.platform.as_deref().map(|s| s.trim()) {
+                Some(s) if !s.is_empty() => s.to_string(),
+                _ => continue,
+            };
+            let delta = match t.tx_type.as_str() {
+                "buy" | "passive_income" => t.quantity,
+                "sell" => -t.quantity,
+                _ => 0.0,
+            };
+            *per_platform.entry(plat).or_insert(0.0) += delta;
         }
-        let mut platforms: Vec<String> = platform_set.into_iter().collect();
+        let mut platforms: Vec<String> = per_platform
+            .into_iter()
+            .filter(|(_, qty)| *qty > 1e-9)
+            .map(|(p, _)| p)
+            .collect();
         platforms.sort();
-        // Eğer hiç tx-level platform yoksa asset.platform fallback
-        if platforms.is_empty() {
-            if let Some(p) = &a.platform {
-                let trimmed = p.trim();
-                if !trimmed.is_empty() {
-                    platforms.push(trimmed.to_string());
-                }
-            }
-        }
         let cached = cache::get(pool, a.id).await?;
 
         let (current_price, price_currency, price_fetched_at, price_change_24h_pct) = match &cached

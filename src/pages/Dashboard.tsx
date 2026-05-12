@@ -1,9 +1,9 @@
-import { useEffect, useState } from "react";
-import { Plus } from "lucide-react";
+import { useEffect, useRef, useState } from "react";
+import { Plus, Filter, Columns3 } from "lucide-react";
 import { toast } from "sonner";
 import { Hero } from "../components/dashboard/Hero";
 import { AllocationPie } from "../components/dashboard/AllocationPie";
-import { AssetTable } from "../components/dashboard/AssetTable";
+import { AssetTable, type AssetTableHandle } from "../components/dashboard/AssetTable";
 import { PortfolioTrendChart } from "../components/charts/PortfolioTrendChart";
 import { BulkPlatformAssignModal } from "../components/BulkPlatformAssignModal";
 import { Skeleton } from "../components/Skeleton";
@@ -40,6 +40,7 @@ export function Dashboard({ activeId }: { activeId: number | null }) {
 
   const openModal = useUIStore((s) => s.openModal);
   const [allocationMode, setAllocationMode] = useState<"type" | "platform">("type");
+  const tableRef = useRef<AssetTableHandle>(null);
 
   // Asset listelerini fetch'le. "Hepsi" iken hepsi için, tek iken sadece o.
   useEffect(() => {
@@ -182,13 +183,35 @@ export function Dashboard({ activeId }: { activeId: number | null }) {
             <h3 className="text-[11px] font-medium tracking-[0.05em] text-(--color-text-secondary) uppercase">
               Varlıklar
             </h3>
-            <button
-              onClick={onAddAsset}
-              className={`${buttonPrimary} inline-flex items-center gap-1.5`}
-            >
-              <Plus className="h-4 w-4" strokeWidth={2.5} />
-              Varlık Ekle
-            </button>
+            <div className="flex items-center gap-1.5">
+              <button
+                onClick={(e) => {
+                  e.stopPropagation();
+                  tableRef.current?.openFilters();
+                }}
+                className="inline-flex items-center gap-1.5 rounded-lg border border-(--color-border-subtle) bg-(--color-bg-panel) px-3 py-2 text-sm font-medium text-(--color-text-secondary) transition-colors hover:border-(--color-border-strong) hover:text-(--color-text-primary)"
+              >
+                <Filter className="h-4 w-4" />
+                Filtrele
+              </button>
+              <button
+                onClick={(e) => {
+                  e.stopPropagation();
+                  tableRef.current?.openColumns();
+                }}
+                className="inline-flex items-center gap-1.5 rounded-lg border border-(--color-border-subtle) bg-(--color-bg-panel) px-3 py-2 text-sm font-medium text-(--color-text-secondary) transition-colors hover:border-(--color-border-strong) hover:text-(--color-text-primary)"
+              >
+                <Columns3 className="h-4 w-4" />
+                Düzenle
+              </button>
+              <button
+                onClick={onAddAsset}
+                className={`${buttonPrimary} inline-flex items-center gap-1.5`}
+              >
+                <Plus className="h-4 w-4" strokeWidth={2.5} />
+                Varlık Ekle
+              </button>
+            </div>
           </div>
           {loading && !stats ? (
             <div className="space-y-2 rounded-xl border border-(--color-border-subtle) bg-(--color-bg-panel) p-4">
@@ -198,7 +221,9 @@ export function Dashboard({ activeId }: { activeId: number | null }) {
             </div>
           ) : (
             <AssetTable
+              ref={tableRef}
               assets={stats?.assets ?? []}
+              groupBySymbol={activeId == null}
               displayCurrency={displayCurrency}
             />
           )}

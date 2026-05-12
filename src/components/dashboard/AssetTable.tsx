@@ -1,11 +1,18 @@
-import { useEffect, useMemo, useState } from "react";
-import { ChevronRight, ArrowUp, ArrowDown, Trash2, Pencil, Plus, Building2, Columns3, GripVertical } from "lucide-react";
+import {
+  forwardRef,
+  useEffect,
+  useImperativeHandle,
+  useMemo,
+  useState,
+} from "react";
+import { ChevronRight, ChevronDown, ArrowUp, ArrowDown, Trash2, Pencil, Plus, Building2, GripVertical } from "lucide-react";
 import { motion } from "framer-motion";
 import { toast } from "sonner";
 import { useUIStore } from "../../stores/uiStore";
 import { assetTypeLabel } from "../../lib/colors";
 import { AssetIcon } from "../AssetIcon";
 import { useAssetStore } from "../../stores/assetStore";
+import { usePortfolioStore } from "../../stores/portfolioStore";
 import { useStatsStore } from "../../stores/statsStore";
 import { useSettingsStore } from "../../stores/useSettingsStore";
 import { playSound } from "../../lib/sounds";
@@ -18,17 +25,20 @@ import {
 } from "../../lib/format";
 import { useFlashOnChange } from "../../hooks/useFlashOnChange";
 import { api, type AssetStats } from "../../lib/api";
+import { aggregateGroup } from "../../lib/groupAssets";
 import { AddTransactionModal } from "../AddTransactionModal";
 import { EditTransactionModal } from "../EditTransactionModal";
 import { EditAssetPlatformModal } from "../EditAssetPlatformModal";
 
-export function AssetTable({
-  assets,
-  displayCurrency,
-}: {
-  assets: AssetStats[];
-  displayCurrency: string;
-}) {
+export type AssetTableHandle = {
+  openFilters: () => void;
+  openColumns: () => void;
+};
+
+export const AssetTable = forwardRef<
+  AssetTableHandle,
+  { assets: AssetStats[]; displayCurrency: string; groupBySymbol?: boolean }
+>(function AssetTable({ assets, displayCurrency, groupBySymbol = false }, ref) {
   const goAsset = useUIStore((s) => s.goAsset);
   const openModal = useUIStore((s) => s.openModal);
   const removeAsset = useAssetStore((s) => s.remove);
@@ -174,8 +184,158 @@ export function AssetTable({
     });
   };
 
+  // Filtreler
+  const [plFilter, setPlFilter] = useState<"all" | "profit" | "loss">("all");
+  const [platformFilter, setPlatformFilter] = useState<Set<string>>(new Set());
+  const [typeFilter, setTypeFilter] = useState<Set<string>>(new Set());
+  const [filterOpen, setFilterOpen] = useState(false);
+  useEffect(() => {
+    if (!filterOpen) return;
+    const close = (e: MouseEvent) => {
+      const target = e.target as HTMLElement;
+      if (!target.closest("[data-filter-menu]")) setFilterOpen(false);
+    };
+    window.addEventListener("click", close);
+    return () => window.removeEventListener("click", close);
+  }, [filterOpen]);
+
+  // Platform listesi tamamen tx-derived (a.platforms) — buy/sell/passive_income
+  // net qty > 0 olan platformlar. Asset-level `a.platform` artık otorite değil
+  // (yalnızca yeni tx modal'ı için default değer). Grup satırında üyelerin
+  // platformlarını birleştir.
+  const allPlatformsOf = (a: AssetStats): Set<string> => {
+    const set = new Set<string>();
+    for (const p of a.platforms ?? []) if (p) set.add(p);
+    if (a.members) {
+      for (const m of a.members) {
+        for (const p of m.platforms ?? []) if (p) set.add(p);
+      }
+    }
+    return set;
+  };
+
+  const platformOptions = useMemo(() => {
+    const set = new Set<string>();
+    for (const a of assets) for (const p of allPlatformsOf(a)) set.add(p);
+    return [...set].sort((a, b) => a.localeCompare(b));
+  }, [assets]);
+  const typeOptions = useMemo(() => {
+    const set = new Set<string>();
+    for (const a of assets) set.add(a.asset_type);
+    return [...set].sort();
+  }, [assets]);
+  const typeLabel: Record<string, string> = {
+    crypto: "Kripto",
+    stock: "Hisse",
+    fx: "Döviz",
+    commodity: "Emtia",
+  };
+
+  // Bir asset platforma uyuyor mu? Filtre yoksa hep true.
+  // platformFilter içindeki "" sentinel'i "belirtilmemiş" anlamına gelir.
+  const matchesPlatformFilter = (a: AssetStats): boolean => {
+    if (platformFilter.size === 0) return true;
+    const hits = allPlatformsOf(a);
+    if (hits.size === 0 && platformFilter.has("")) return true;
+    for (const p of hits) if (platformFilter.has(p)) return true;
+    return false;
+  };
+
+  const hasUnassignedAssets = useMemo(
+    () => assets.some((a) => allPlatformsOf(a).size === 0),
+    [assets]
+  );
+
+  const filteredAssets = useMemo(() => {
+    // 1) Önce ham asset listesini pl/tip filtresine sok.
+    const prelim = assets.filter((a) => {
+      if (plFilter === "profit" && (a.unrealized_pl_display ?? 0) <= 0) return false;
+      if (plFilter === "loss" && (a.unrealized_pl_display ?? 0) >= 0) return false;
+      if (typeFilter.size > 0 && !typeFilter.has(a.asset_type)) return false;
+      return true;
+    });
+
+    // 2) Platform filtresini uygula. groupBySymbol açıksa, üyelerden de süz.
+    let withPlatform: AssetStats[];
+    if (platformFilter.size === 0) {
+      withPlatform = prelim;
+    } else if (!groupBySymbol) {
+      withPlatform = prelim.filter(matchesPlatformFilter);
+    } else {
+      // "Hepsi" görünümü → her satır tek portföyden bir asset.
+      // Sembol grubu daha sonra oluşturulduğu için burada düz filtre yeter.
+      withPlatform = prelim.filter(matchesPlatformFilter);
+    }
+
+    // 3) Sembol bazında grupla (sadece "Hepsi" görünümünde).
+    if (!groupBySymbol) return withPlatform;
+    const map = new Map<string, AssetStats[]>();
+    for (const a of withPlatform) {
+      const key = `${a.symbol}|${a.asset_type}`;
+      if (!map.has(key)) map.set(key, []);
+      map.get(key)!.push(a);
+    }
+    return [...map.values()].map(aggregateGroup);
+  }, [assets, plFilter, platformFilter, typeFilter, groupBySymbol]);
+
+  const togglePlatformFilter = (p: string) => {
+    setPlatformFilter((cur) => {
+      const next = new Set(cur);
+      if (next.has(p)) next.delete(p);
+      else next.add(p);
+      return next;
+    });
+  };
+  const toggleTypeFilter = (t: string) => {
+    setTypeFilter((cur) => {
+      const next = new Set(cur);
+      if (next.has(t)) next.delete(t);
+      else next.add(t);
+      return next;
+    });
+  };
+  const clearFilters = () => {
+    setPlFilter("all");
+    setPlatformFilter(new Set());
+    setTypeFilter(new Set());
+  };
+  const activeFilterCount =
+    (plFilter !== "all" ? 1 : 0) + platformFilter.size + typeFilter.size;
+
+  useImperativeHandle(
+    ref,
+    () => ({
+      openFilters: () => setFilterOpen(true),
+      openColumns: () => setColsOpen(true),
+    }),
+    []
+  );
+
+  // "Hepsi" görünümünde grup satırları expand edilebilir
+  const [expandedGroups, setExpandedGroups] = useState<Set<number>>(new Set());
+  const toggleExpand = (assetId: number) => {
+    setExpandedGroups((cur) => {
+      const next = new Set(cur);
+      if (next.has(assetId)) next.delete(assetId);
+      else next.add(assetId);
+      return next;
+    });
+  };
+
+  // asset_id → portfolio name lookup (sub-row badge'leri için)
+  const byPortfolioMap = useAssetStore((s) => s.byPortfolio);
+  const portfoliosList = usePortfolioStore((s) => s.portfolios);
+  const portfolioNameOf = (assetId: number): string => {
+    for (const p of portfoliosList) {
+      if ((byPortfolioMap[p.id] ?? []).some((a) => a.id === assetId)) {
+        return p.name;
+      }
+    }
+    return "—";
+  };
+
   const sortedAssets = useMemo(() => {
-    const list = [...assets];
+    const list = [...filteredAssets];
     const factor = sort.dir === "asc" ? 1 : -1;
     const valOf = (a: AssetStats): string | number => {
       switch (sort.key) {
@@ -217,7 +377,7 @@ export function AssetTable({
       return factor * ((va as number) - (vb as number));
     });
     return list;
-  }, [assets, sort]);
+  }, [filteredAssets, sort]);
 
   const toggleSort = (key: SortKey) => {
     setSort((cur) => {
@@ -344,18 +504,119 @@ export function AssetTable({
 
   return (
     <div className="relative rounded-xl border border-(--color-border-subtle) bg-(--color-bg-panel)">
-      {/* Sütun toggle — sağ üst köşede */}
+      {/* Filtre paneli — dış buton (Dashboard) tarafından açılır */}
+      <div className="absolute right-2 top-2 z-10" data-filter-menu>
+        {filterOpen && (
+          <div
+            className="absolute right-0 top-full mt-1 w-64 overflow-hidden rounded-lg border border-(--color-border-subtle) bg-(--color-bg-panel) p-3 text-sm shadow-2xl shadow-black/50"
+            onClick={(e) => e.stopPropagation()}
+          >
+            {/* PL durumu */}
+            <div className="mb-3">
+              <div className="mb-1.5 text-[10px] font-medium tracking-[0.06em] text-(--color-text-tertiary) uppercase">
+                Pozisyon
+              </div>
+              <div className="flex gap-1 rounded-md border border-(--color-border-subtle) bg-(--color-bg-base) p-0.5">
+                {(
+                  [
+                    { k: "all", l: "Hepsi" },
+                    { k: "profit", l: "Karda" },
+                    { k: "loss", l: "Zararda" },
+                  ] as const
+                ).map((opt) => (
+                  <button
+                    key={opt.k}
+                    onClick={() => setPlFilter(opt.k)}
+                    className={cn(
+                      "flex-1 rounded px-2 py-1 text-[11px] font-medium transition-colors",
+                      plFilter === opt.k
+                        ? "bg-(--color-accent)/15 text-(--color-accent)"
+                        : "text-(--color-text-secondary) hover:text-(--color-text-primary)"
+                    )}
+                  >
+                    {opt.l}
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            {/* Tip */}
+            {typeOptions.length > 0 && (
+              <div className="mb-3">
+                <div className="mb-1.5 text-[10px] font-medium tracking-[0.06em] text-(--color-text-tertiary) uppercase">
+                  Varlık tipi
+                </div>
+                <div className="flex flex-wrap gap-1">
+                  {typeOptions.map((t) => (
+                    <button
+                      key={t}
+                      onClick={() => toggleTypeFilter(t)}
+                      className={cn(
+                        "rounded-md border px-2 py-0.5 text-[11px] transition-colors",
+                        typeFilter.has(t)
+                          ? "border-(--color-accent)/40 bg-(--color-accent)/15 text-(--color-accent)"
+                          : "border-(--color-border-subtle) bg-(--color-bg-base) text-(--color-text-secondary) hover:border-(--color-accent)/40 hover:text-(--color-accent)"
+                      )}
+                    >
+                      {typeLabel[t] ?? t}
+                    </button>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            {/* Platform */}
+            {(platformOptions.length > 0 || hasUnassignedAssets) && (
+              <div className="mb-3">
+                <div className="mb-1.5 text-[10px] font-medium tracking-[0.06em] text-(--color-text-tertiary) uppercase">
+                  Platform
+                </div>
+                <div className="flex flex-wrap gap-1">
+                  {platformOptions.map((p) => (
+                    <button
+                      key={p}
+                      onClick={() => togglePlatformFilter(p)}
+                      className={cn(
+                        "rounded-md border px-2 py-0.5 text-[11px] transition-colors",
+                        platformFilter.has(p)
+                          ? "border-(--color-accent)/40 bg-(--color-accent)/15 text-(--color-accent)"
+                          : "border-(--color-border-subtle) bg-(--color-bg-base) text-(--color-text-secondary) hover:border-(--color-accent)/40 hover:text-(--color-accent)"
+                      )}
+                    >
+                      {p}
+                    </button>
+                  ))}
+                  {hasUnassignedAssets && (
+                    <button
+                      onClick={() => togglePlatformFilter("")}
+                      className={cn(
+                        "rounded-md border px-2 py-0.5 text-[11px] italic transition-colors",
+                        platformFilter.has("")
+                          ? "border-(--color-accent)/40 bg-(--color-accent)/15 text-(--color-accent)"
+                          : "border-dashed border-(--color-border-subtle) bg-(--color-bg-base) text-(--color-text-tertiary) hover:border-(--color-accent)/40 hover:text-(--color-accent)"
+                      )}
+                    >
+                      Belirtilmemiş
+                    </button>
+                  )}
+                </div>
+              </div>
+            )}
+
+            {activeFilterCount > 0 && (
+              <button
+                onClick={clearFilters}
+                className="mt-1 w-full rounded-md border border-(--color-border-subtle) bg-(--color-bg-base) px-2 py-1 text-[11px] text-(--color-text-secondary) transition-colors hover:text-(--color-text-primary)"
+              >
+                Temizle
+              </button>
+            )}
+          </div>
+        )}
+      </div>
+
+      {/* Sütun düzenle paneli — dış buton (Dashboard) tarafından açılır */}
       <div className="absolute right-2 top-2 z-10" data-cols-menu>
-        <button
-          onClick={(e) => {
-            e.stopPropagation();
-            setColsOpen((v) => !v);
-          }}
-          className="rounded-md border border-(--color-border-subtle) bg-(--color-bg-base) p-1 text-(--color-text-tertiary) transition-colors hover:text-(--color-text-primary)"
-          title="Sütunları düzenle"
-        >
-          <Columns3 className="h-3.5 w-3.5" />
-        </button>
         {colsOpen && (
           <div className="absolute right-0 top-full mt-1 min-w-[200px] overflow-hidden rounded-lg border border-(--color-border-subtle) bg-(--color-bg-panel) py-1 text-sm shadow-2xl shadow-black/50">
             <div className="px-3 pb-1 pt-0.5 text-[10px] tracking-wide text-(--color-text-tertiary) uppercase">
@@ -457,18 +718,44 @@ export function AssetTable({
           </tr>
         </thead>
         <tbody>
-          {sortedAssets.map((a) => (
-            <AssetRow
-              key={a.asset_id}
-              a={a}
-              displayCurrency={displayCurrency}
-              cols={cols}
-              colOrder={colOrder}
-              widthHidden={widthHidden}
-              onClick={() => goAsset(a.asset_id)}
-              onContextMenu={(e) => onContextMenu(e, a)}
-            />
-          ))}
+          {sortedAssets.flatMap((a) => {
+            const isGroup = (a.members?.length ?? 0) > 1;
+            const expanded = expandedGroups.has(a.asset_id);
+            const rows = [
+              <AssetRow
+                key={a.asset_id}
+                a={a}
+                displayCurrency={displayCurrency}
+                cols={cols}
+                colOrder={colOrder}
+                widthHidden={widthHidden}
+                isGroup={isGroup}
+                expanded={expanded}
+                onClick={() =>
+                  isGroup ? toggleExpand(a.asset_id) : goAsset(a.asset_id)
+                }
+                onContextMenu={(e) => onContextMenu(e, a)}
+              />,
+            ];
+            if (isGroup && expanded && a.members) {
+              for (const m of a.members) {
+                rows.push(
+                  <AssetRow
+                    key={`sub-${m.asset_id}`}
+                    a={m}
+                    displayCurrency={displayCurrency}
+                    cols={cols}
+                    colOrder={colOrder}
+                    widthHidden={widthHidden}
+                    subPortfolioName={portfolioNameOf(m.asset_id)}
+                    onClick={() => goAsset(m.asset_id)}
+                    onContextMenu={(e) => onContextMenu(e, m)}
+                  />
+                );
+              }
+            }
+            return rows;
+          })}
         </tbody>
       </table>
 
@@ -514,7 +801,7 @@ export function AssetTable({
       )}
     </div>
   );
-}
+});
 
 type AssetRowColKey =
   | "platform"
@@ -532,6 +819,9 @@ function AssetRow({
   cols,
   colOrder,
   widthHidden,
+  isGroup,
+  expanded,
+  subPortfolioName,
   onClick,
   onContextMenu,
 }: {
@@ -540,6 +830,9 @@ function AssetRow({
   cols: Record<AssetRowColKey, boolean>;
   colOrder: AssetRowColKey[];
   widthHidden: Set<AssetRowColKey>;
+  isGroup?: boolean;
+  expanded?: boolean;
+  subPortfolioName?: string;
   onClick: () => void;
   onContextMenu?: (e: React.MouseEvent) => void;
 }) {
@@ -565,16 +858,37 @@ function AssetRow({
       transition={{ duration: 0.15 }}
       className="cursor-pointer border-b border-(--color-border-subtle) last:border-b-0"
     >
-      <Td>
+      <Td className={subPortfolioName ? "pl-10" : undefined}>
         <div className="flex items-center gap-2.5">
+          {isGroup ? (
+            expanded ? (
+              <ChevronDown className="h-3.5 w-3.5 text-(--color-text-tertiary)" />
+            ) : (
+              <ChevronRight className="h-3.5 w-3.5 text-(--color-text-tertiary)" />
+            )
+          ) : null}
           <AssetIcon
             symbol={a.symbol}
             iconUrl={a.icon_url}
             type={a.asset_type}
-            size={32}
+            size={subPortfolioName ? 24 : 32}
           />
           <div>
-            <div className="font-medium tabular">{a.symbol}</div>
+            <div className="flex items-center gap-1.5">
+              <span className={cn("font-medium tabular", subPortfolioName && "text-sm")}>
+                {a.symbol}
+              </span>
+              {subPortfolioName && (
+                <span className="rounded bg-(--color-bg-base) px-1.5 py-0.5 text-[10px] font-medium text-(--color-text-secondary)">
+                  {subPortfolioName}
+                </span>
+              )}
+              {isGroup && (
+                <span className="rounded bg-(--color-bg-base) px-1.5 py-0.5 text-[10px] font-medium text-(--color-text-tertiary)">
+                  {a.members?.length} portföy
+                </span>
+              )}
+            </div>
             <div className="text-xs text-(--color-text-tertiary)">
               {assetTypeLabel(a.asset_type)} • {a.name}
             </div>
@@ -733,9 +1047,9 @@ function Th({
 }: {
   children: React.ReactNode;
   align?: "right";
-  sortKey?: "symbol" | "platform" | "value" | "plAbs" | "plPct";
+  sortKey?: "symbol" | "platform" | "value" | "plAbs" | "plPct" | "daily" | "passiveAnnual";
   sort?: { key: string; dir: "asc" | "desc" };
-  onSort?: (key: "symbol" | "platform" | "value" | "plAbs" | "plPct") => void;
+  onSort?: (key: "symbol" | "platform" | "value" | "plAbs" | "plPct" | "daily" | "passiveAnnual") => void;
 }) {
   const sortable = !!sortKey && !!onSort;
   const active = sort?.key === sortKey;
