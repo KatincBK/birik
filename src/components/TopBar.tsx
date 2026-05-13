@@ -15,11 +15,11 @@ type Props = {
 };
 
 export function TopBar({ activeId, title }: Props) {
-  const key = statsKey(activeId);
+  const displayCurrency = useSettingsStore((s) => s.displayCurrency);
+  const key = statsKey(activeId, displayCurrency);
   const refreshLive = useStatsStore((s) => s.refreshLive);
   const lastRefresh = useStatsStore((s) => s.lastRefresh[key] ?? null);
   const loading = useStatsStore((s) => s.loading[key] ?? false);
-  const displayCurrency = useSettingsStore((s) => s.displayCurrency);
   const soundEnabled = useSettingsStore((s) => s.soundEnabled);
   const toggleSound = useSettingsStore((s) => s.toggleSound);
   const online = useOnline();

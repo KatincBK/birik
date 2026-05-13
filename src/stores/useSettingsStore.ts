@@ -1,5 +1,11 @@
 import { create } from "zustand";
 import { api } from "../lib/api";
+import {
+  parseExtraSymbols,
+  serializeExtraSymbols,
+  CASH_EXTRA_KEY,
+  COMMODITY_EXTRA_KEY,
+} from "../lib/cashLike";
 
 export type Currency = "USD" | "TRY" | "EUR" | "BTC" | "ETH";
 export type RefreshInterval = 1 | 5 | 15;
@@ -10,6 +16,14 @@ type SettingsState = {
   soundEnabled: boolean;
   refreshIntervalMin: RefreshInterval;
   autoBackup: boolean;
+  /** Kullanıcının "Nakit" olarak işaretlediği extra sembol listesi
+   *  (DEFAULT_STABLECOINS + fx'in üstüne ek). UPPERCASE. */
+  cashExtraSymbols: string[];
+  /** Kullanıcının "Emtia" olarak işaretlediği extra sembol listesi
+   *  (DEFAULT_COMMODITY_TOKENS'ın üstüne ek). UPPERCASE. */
+  commodityExtraSymbols: string[];
+  /** Bütçe planlamasında bugünden itibaren kaç ay ileri göstereceğiz. */
+  budgetFutureMonths: number;
   /** Boot'ta DB'den yüklendi mi */
   hydrated: boolean;
 
@@ -19,6 +33,11 @@ type SettingsState = {
   setSoundEnabled: (v: boolean) => void;
   toggleSound: () => void;
   setRefreshInterval: (m: RefreshInterval) => void;
+  addCashSymbol: (sym: string) => void;
+  removeCashSymbol: (sym: string) => void;
+  addCommoditySymbol: (sym: string) => void;
+  removeCommoditySymbol: (sym: string) => void;
+  setBudgetFutureMonths: (n: number) => void;
 };
 
 /** Setting key sabitleri — backend ile senkron tutuluyor (PLAN §9). */
@@ -27,6 +46,9 @@ const KEY = {
   currencyCycle: "currency_cycle",
   soundEnabled: "sound_enabled",
   refreshInterval: "refresh_interval_min",
+  cashExtraSymbols: CASH_EXTRA_KEY,
+  commodityExtraSymbols: COMMODITY_EXTRA_KEY,
+  budgetFutureMonths: "budget_future_months",
 };
 
 export const useSettingsStore = create<SettingsState>((set, get) => ({
@@ -35,6 +57,9 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
   soundEnabled: true,
   refreshIntervalMin: 5,
   autoBackup: true,
+  cashExtraSymbols: [],
+  commodityExtraSymbols: [],
+  budgetFutureMonths: 12,
   hydrated: false,
 
   hydrate: async () => {
@@ -62,11 +87,27 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
       const refreshIntervalMin =
         (parseInt(map.get(KEY.refreshInterval) ?? "5", 10) as RefreshInterval) || 5;
 
+      const cashExtraSymbols = parseExtraSymbols(
+        map.get(KEY.cashExtraSymbols) ?? null
+      );
+      const commodityExtraSymbols = parseExtraSymbols(
+        map.get(KEY.commodityExtraSymbols) ?? null
+      );
+      const budgetFutureMonths = (() => {
+        const raw = map.get(KEY.budgetFutureMonths);
+        if (!raw) return 12;
+        const n = parseInt(raw, 10);
+        return Number.isFinite(n) && n >= 0 && n <= 120 ? n : 12;
+      })();
+
       set({
         displayCurrency,
         currencyCycle,
         soundEnabled,
         refreshIntervalMin,
+        cashExtraSymbols,
+        commodityExtraSymbols,
+        budgetFutureMonths,
         hydrated: true,
       });
     } catch (err) {
@@ -98,5 +139,48 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
   setRefreshInterval: (m) => {
     set({ refreshIntervalMin: m });
     api.setSetting(KEY.refreshInterval, m.toString()).catch(() => {});
+  },
+  addCashSymbol: (sym) => {
+    const clean = sym.trim().toUpperCase();
+    if (!clean) return;
+    const cur = get().cashExtraSymbols;
+    if (cur.includes(clean)) return;
+    const next = [...cur, clean].sort();
+    set({ cashExtraSymbols: next });
+    api.setSetting(KEY.cashExtraSymbols, serializeExtraSymbols(next)).catch(() => {});
+  },
+  removeCashSymbol: (sym) => {
+    const clean = sym.trim().toUpperCase();
+    const cur = get().cashExtraSymbols;
+    if (!cur.includes(clean)) return;
+    const next = cur.filter((s) => s !== clean);
+    set({ cashExtraSymbols: next });
+    api.setSetting(KEY.cashExtraSymbols, serializeExtraSymbols(next)).catch(() => {});
+  },
+  addCommoditySymbol: (sym) => {
+    const clean = sym.trim().toUpperCase();
+    if (!clean) return;
+    const cur = get().commodityExtraSymbols;
+    if (cur.includes(clean)) return;
+    const next = [...cur, clean].sort();
+    set({ commodityExtraSymbols: next });
+    api
+      .setSetting(KEY.commodityExtraSymbols, serializeExtraSymbols(next))
+      .catch(() => {});
+  },
+  removeCommoditySymbol: (sym) => {
+    const clean = sym.trim().toUpperCase();
+    const cur = get().commodityExtraSymbols;
+    if (!cur.includes(clean)) return;
+    const next = cur.filter((s) => s !== clean);
+    set({ commodityExtraSymbols: next });
+    api
+      .setSetting(KEY.commodityExtraSymbols, serializeExtraSymbols(next))
+      .catch(() => {});
+  },
+  setBudgetFutureMonths: (n) => {
+    const clamped = Math.max(0, Math.min(120, Math.round(n)));
+    set({ budgetFutureMonths: clamped });
+    api.setSetting(KEY.budgetFutureMonths, clamped.toString()).catch(() => {});
   },
 }));

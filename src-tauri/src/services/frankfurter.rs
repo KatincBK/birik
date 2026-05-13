@@ -23,10 +23,12 @@ const URL: &str = "https://api.frankfurter.dev/latest?base=TRY";
 
 /// Tarihsel kur cache: "YYYY-MM-DD" → 1 USD karşılığı diğer currency map.
 /// Tarihsel kurlar değişmediği için süresiz cache.
+#[allow(clippy::type_complexity)]
 static HISTORICAL_CACHE: Lazy<Mutex<HashMap<String, HashMap<String, f64>>>> =
     Lazy::new(|| Mutex::new(HashMap::new()));
 
 /// Desteklenen para birimleri cache'i (kod → tam isim). Frankfurter /currencies.
+#[allow(clippy::type_complexity)]
 static CURRENCIES_CACHE: Lazy<Mutex<Option<Vec<(String, String)>>>> =
     Lazy::new(|| Mutex::new(None));
 

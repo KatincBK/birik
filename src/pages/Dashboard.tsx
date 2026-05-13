@@ -23,7 +23,7 @@ const EMPTY_ASSETS: Asset[] = [];
 export function Dashboard({ activeId }: { activeId: number | null }) {
   const displayCurrency = useSettingsStore((s) => s.displayCurrency);
   const portfolios = usePortfolioStore((s) => s.portfolios);
-  const key = statsKey(activeId);
+  const key = statsKey(activeId, displayCurrency);
 
   const stats = useStatsStore((s) => s.byPortfolio[key] ?? null);
   const recompute = useStatsStore((s) => s.recompute);
@@ -39,7 +39,7 @@ export function Dashboard({ activeId }: { activeId: number | null }) {
       : assetsByPortfolio[activeId] ?? EMPTY_ASSETS;
 
   const openModal = useUIStore((s) => s.openModal);
-  const [allocationMode, setAllocationMode] = useState<"type" | "platform">("type");
+  const [allocationMode, setAllocationMode] = useState<"type" | "asset" | "platform">("type");
   const tableRef = useRef<AssetTableHandle>(null);
 
   // Asset listelerini fetch'le. "Hepsi" iken hepsi için, tek iken sadece o.
@@ -75,7 +75,11 @@ export function Dashboard({ activeId }: { activeId: number | null }) {
     <div className="mx-auto max-w-6xl space-y-6 px-6 py-8">
       <header className="flex items-end justify-between gap-6">
         <div className="flex flex-col gap-1.5">
-          <Hero totalValue={stats?.total_value ?? 0} loading={loading} />
+          <Hero
+            totalValue={stats?.total_value ?? 0}
+            loading={loading}
+            staleHint={loading || stats == null}
+          />
           {stats?.total_change_24h_pct != null && (
             <div
               className={`inline-flex items-center gap-1.5 text-sm tabular ${changeClass(
@@ -131,18 +135,24 @@ export function Dashboard({ activeId }: { activeId: number | null }) {
               Dağılım
             </h3>
             <div className="inline-flex gap-0.5 rounded-md border border-(--color-border-subtle) bg-(--color-bg-base) p-0.5">
-              {(["type", "platform"] as const).map((m) => (
+              {(
+                [
+                  { k: "type", label: "Tür" },
+                  { k: "asset", label: "Varlık" },
+                  { k: "platform", label: "Platform" },
+                ] as const
+              ).map((opt) => (
                 <button
-                  key={m}
-                  onClick={() => setAllocationMode(m)}
+                  key={opt.k}
+                  onClick={() => setAllocationMode(opt.k)}
                   className={cn(
                     "rounded px-2 py-0.5 text-[10px] font-medium transition-colors",
-                    allocationMode === m
+                    allocationMode === opt.k
                       ? "border border-(--color-accent)/40 bg-(--color-accent)/15 text-(--color-accent)"
                       : "border border-transparent text-(--color-text-secondary) hover:text-(--color-text-primary)"
                   )}
                 >
-                  {m === "type" ? "Varlık" : "Platform"}
+                  {opt.label}
                 </button>
               ))}
             </div>

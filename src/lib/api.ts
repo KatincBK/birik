@@ -51,17 +51,40 @@ export type InvestmentEntry = {
   recorded_at: number;
 };
 
-export type BudgetEntry = {
+export type BudgetLine = {
+  id: number;
+  budget_id: number;
+  kind: "income" | "expense";
+  label: string;
+  amount: number;
+  currency: string;
+  /** 'YYYY-MM' */
+  start_ym: string;
+  /** 'YYYY-MM' veya null (açık uçlu) */
+  end_ym: string | null;
+  fx_to_usd: number | null;
+  note: string | null;
+  created_at: number;
+};
+
+export type BudgetMonthOverride = {
   budget_id: number;
   year_month: string;
-  income: number;
-  expense: number;
-  note: string | null;
-  recorded_at: number;
-  /** Bu entry'nin native currency'si. NULL = eski kayıt, bütçe currency'si varsayılır */
-  currency: string | null;
-  /** 1 native = X USD, entry tarihindeki kilit. NULL = current FX fallback */
-  fx_to_usd: number | null;
+  interpolate: number;
+};
+
+export type MonthlyBudget = {
+  year_month: string;
+  income_display: number;
+  expense_display: number;
+  net_display: number;
+  is_interpolated: boolean;
+};
+
+export type BudgetPlan = {
+  budget_id: number;
+  display_currency: string;
+  months: MonthlyBudget[];
 };
 
 export type BudgetProjection = {
@@ -349,26 +372,53 @@ export const api = {
   deleteBudget: (id: number) => invoke<void>("delete_budget", { id }),
   setBudgetPin: (id: number, pinned: boolean) =>
     invoke<void>("set_budget_pin", { id, pinned }),
-  upsertBudgetEntry: (args: {
+  upsertBudgetLine: (args: {
+    id?: number | null;
+    budgetId: number;
+    kind: "income" | "expense";
+    label: string;
+    amount: number;
+    currency: string;
+    startYm: string;
+    endYm?: string | null;
+    note?: string | null;
+  }) =>
+    invoke<BudgetLine>("upsert_budget_line", {
+      id: args.id ?? null,
+      budgetId: args.budgetId,
+      kind: args.kind,
+      label: args.label,
+      amount: args.amount,
+      currency: args.currency,
+      startYm: args.startYm,
+      endYm: args.endYm ?? null,
+      note: args.note ?? null,
+    }),
+  listBudgetLines: (budgetId: number) =>
+    invoke<BudgetLine[]>("list_budget_lines", { budgetId }),
+  deleteBudgetLine: (id: number) => invoke<void>("delete_budget_line", { id }),
+  setBudgetMonthOverride: (args: {
     budgetId: number;
     yearMonth: string;
-    income: number;
-    expense: number;
-    note: string | null;
-    currency?: string | null;
+    interpolate: boolean;
   }) =>
-    invoke<BudgetEntry>("upsert_budget_entry", {
+    invoke<void>("set_budget_month_override", {
       budgetId: args.budgetId,
       yearMonth: args.yearMonth,
-      income: args.income,
-      expense: args.expense,
-      note: args.note,
-      currency: args.currency ?? null,
+      interpolate: args.interpolate,
     }),
-  listBudgetEntries: (budgetId: number) =>
-    invoke<BudgetEntry[]>("list_budget_entries", { budgetId }),
-  deleteBudgetEntry: (budgetId: number, yearMonth: string) =>
-    invoke<void>("delete_budget_entry", { budgetId, yearMonth }),
+  listBudgetMonthOverrides: (budgetId: number) =>
+    invoke<BudgetMonthOverride[]>("list_budget_month_overrides", { budgetId }),
+  computeBudgetPlan: (args: {
+    budgetId: number;
+    displayCurrency: string;
+    futureMonths?: number;
+  }) =>
+    invoke<BudgetPlan>("compute_budget_plan", {
+      budgetId: args.budgetId,
+      displayCurrency: args.displayCurrency,
+      futureMonths: args.futureMonths ?? null,
+    }),
   projectBudget: (budgetId: number) =>
     invoke<BudgetProjection>("project_budget", { budgetId }),
 
@@ -546,6 +596,7 @@ export const api = {
         icon: string | null;
         asset_type: string;
         exchange: string | null;
+        market_cap_rank: number | null;
       }[]
     >("search_symbol", { query, assetType }),
 
@@ -696,5 +747,6 @@ export const api = {
       transactions_added: number;
       alerts_added: number;
       goals_added: number;
+      investment_entries_added: number;
     }>("import_data", { json, mode }),
 };

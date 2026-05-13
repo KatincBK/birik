@@ -50,6 +50,20 @@ export default function App() {
     refreshBudgets(activeProfileId).catch(() => {});
   }, [db.status, activeProfileId, refreshPortfolios, refreshBudgets]);
 
+  // İlk boot'ta her portföy için fiyatları tazele — kullanıcı manuel Ctrl+R'a
+  // basmaya gerek kalmasın. Profile başına tek seferlik trigger. Çoklu profil
+  // varsa sadece aktif profil tetiklenir (portfolios store profile-aware).
+  useEffect(() => {
+    if (db.status !== "ready" || portfolios.length === 0) return;
+    const refreshLive = useStatsStore.getState().refreshLive;
+    const displayCurrency = useSettingsStore.getState().displayCurrency;
+    // Hepsi (null) → calcConsolidated zincirini tetikler; aksi halde aktif portföy.
+    refreshLive(activeId, displayCurrency).catch(() => {});
+    // Sadece profile + portfolio listesi şekillenince — sonraki değişimlerde
+    // (currency switch vb.) yeniden tetiklenmemeli.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [db.status, activeProfileId, portfolios.length > 0]);
+
   // Binance WebSocket tick listener — kripto fiyatları canlı akar
   useEffect(() => {
     if (db.status !== "ready") return;

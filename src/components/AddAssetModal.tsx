@@ -67,6 +67,8 @@ type SearchHit = {
   icon: string | null;
   asset_type: string;
   exchange: string | null;
+  /** Kripto için CoinGecko market cap sıralaması — düşük = popüler. */
+  market_cap_rank?: number | null;
 };
 
 /** Hisse adından Clearbit domain tahmini. */
@@ -267,10 +269,21 @@ export function AddAssetModal({ portfolioId }: { portfolioId: number }) {
           return 0;
         };
         const typeWeight = (t: string) => (t === "stock" ? 5 : t === "crypto" ? 1 : 0);
+        // Market cap rank tie-breaker: aynı score + tip içinde popüler önce
+        // (düşük rank = daha popüler). null/undefined sona düşer.
+        const rankOf = (h: SearchHit): number =>
+          h.market_cap_rank != null && h.market_cap_rank > 0
+            ? h.market_cap_rank
+            : Number.MAX_SAFE_INTEGER;
 
         const ranked = merged
-          .map((h) => ({ h, s: scoreOf(h), w: typeWeight(h.asset_type) }))
-          .sort((a, b) => b.s - a.s || b.w - a.w)
+          .map((h) => ({
+            h,
+            s: scoreOf(h),
+            w: typeWeight(h.asset_type),
+            r: rankOf(h),
+          }))
+          .sort((a, b) => b.s - a.s || b.w - a.w || a.r - b.r)
           .map((x) => x.h)
           .slice(0, 30);
 

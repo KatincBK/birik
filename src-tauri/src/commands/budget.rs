@@ -1,9 +1,10 @@
+use chrono::Datelike;
 use serde::Serialize;
 use sqlx::SqlitePool;
 use tauri::State;
 
 use crate::commands::now_secs;
-use crate::db::models::{Budget, BudgetEntry};
+use crate::db::models::{Budget, BudgetLine, BudgetMonthOverride};
 use crate::error::{AppError, AppResult};
 use crate::services::Db;
 
@@ -188,8 +189,71 @@ async fn compute_investment_based_cagr(
 const BUDGET_COLS: &str = "id, name, monthly_income, monthly_expense, currency, \
     target_value, target_date, pinned, created_at, profile_id, target_currency";
 
-const ENTRY_COLS: &str = "budget_id, year_month, income, expense, note, recorded_at, \
-    currency, fx_to_usd";
+const LINE_COLS: &str = "id, budget_id, kind, label, amount, currency, \
+    start_ym, end_ym, fx_to_usd, note, created_at";
+
+/// investment_entries ortalama aylık tutarı, display currency'de. Eğer veri
+/// yoksa None. Profil bazlı. ETA trajectory'sinde "monthly_addition" olarak
+/// kullanılır (budget income/expense ile karıştırılmaz).
+async fn compute_avg_monthly_investment(
+    pool: &SqlitePool,
+    profile_id: Option<i64>,
+    display_currency: &str,
+) -> Option<f64> {
+    let pid = profile_id?;
+    #[derive(sqlx::FromRow)]
+    struct Row {
+        year_month: String,
+        amount: f64,
+        fx_to_usd: Option<f64>,
+        currency: String,
+    }
+    let rows: Vec<Row> = sqlx::query_as(
+        "SELECT year_month, amount, fx_to_usd, currency
+         FROM investment_entries WHERE profile_id = ?",
+    )
+    .bind(pid)
+    .fetch_all(pool)
+    .await
+    .ok()?;
+    if rows.is_empty() {
+        return None;
+    }
+    use std::collections::HashSet;
+    let mut total_usd = 0.0;
+    let mut months: HashSet<String> = HashSet::new();
+    for r in &rows {
+        let usd = if let Some(f) = r.fx_to_usd {
+            r.amount * f
+        } else if r.currency.eq_ignore_ascii_case("USD") {
+            r.amount
+        } else {
+            continue;
+        };
+        total_usd += usd;
+        months.insert(r.year_month.clone());
+    }
+    if total_usd <= 0.0 || months.is_empty() {
+        return None;
+    }
+    let avg_usd = total_usd / months.len() as f64;
+    let display = display_currency.to_uppercase();
+    if display == "USD" {
+        return Some(avg_usd);
+    }
+    // USD → display dönüşümü
+    let fx = crate::services::fx::fetch_rates().await.ok()?;
+    let mut fx_mut = fx;
+    if display == "BTC" || display == "ETH" {
+        crate::commands::calc::enrich_with_crypto(&mut fx_mut, &display, pool).await;
+    }
+    Some(crate::commands::calc::convert(
+        avg_usd,
+        "USD",
+        &display,
+        Some(&fx_mut),
+    ))
+}
 
 #[allow(clippy::too_many_arguments)]
 #[tauri::command]
@@ -336,7 +400,7 @@ pub async fn set_budget_pin(
 }
 
 /* ----------------------------------------------------------------
- * Aylık entries
+ * Bütçe planlama: line items + month overrides
  * ---------------------------------------------------------------- */
 
 /// year_month "YYYY-MM" formatından o ayın 15'i tarihini ISO formatında döndür.
@@ -356,86 +420,130 @@ fn ym_to_mid_iso(year_month: &str) -> Option<String> {
     Some(format!("{y:04}-{m:02}-15"))
 }
 
-#[tauri::command]
-pub async fn upsert_budget_entry(
-    db: State<'_, Db>,
-    budget_id: i64,
-    year_month: String,
-    income: f64,
-    expense: f64,
-    note: Option<String>,
-    currency: Option<String>,
-) -> AppResult<BudgetEntry> {
-    // currency belirtilmediyse bütçenin defaultunu kullan
-    let resolved_currency: String = match currency {
-        Some(c) if !c.trim().is_empty() => c.trim().to_uppercase(),
-        _ => {
-            let row: Option<(String,)> =
-                sqlx::query_as("SELECT currency FROM budgets WHERE id = ?")
-                    .bind(budget_id)
-                    .fetch_optional(&db.pool)
-                    .await?;
-            row.map(|(c,)| c.to_uppercase())
-                .unwrap_or_else(|| "USD".to_string())
-        }
-    };
+/// Geçerli 'YYYY-MM' formatı mı?
+fn parse_ym(year_month: &str) -> Option<(i32, u32)> {
+    let parts: Vec<&str> = year_month.split('-').collect();
+    if parts.len() != 2 {
+        return None;
+    }
+    let y: i32 = parts[0].parse().ok()?;
+    let m: u32 = parts[1].parse().ok()?;
+    if !(1..=12).contains(&m) {
+        return None;
+    }
+    Some((y, m))
+}
 
-    // Tarihsel kur kilit — Frankfurter historical. Hata olursa NULL bırak
-    // (display tarafı current FX ile fallback yapar).
-    let fx_to_usd: Option<f64> = match ym_to_mid_iso(&year_month) {
-        Some(date_iso) => match crate::services::frankfurter::fetch_to_usd_at(
+#[allow(clippy::too_many_arguments)]
+#[tauri::command]
+pub async fn upsert_budget_line(
+    db: State<'_, Db>,
+    id: Option<i64>,
+    budget_id: i64,
+    kind: String,
+    label: String,
+    amount: f64,
+    currency: String,
+    start_ym: String,
+    end_ym: Option<String>,
+    note: Option<String>,
+) -> AppResult<BudgetLine> {
+    let kind = kind.trim().to_lowercase();
+    if kind != "income" && kind != "expense" {
+        return Err(AppError::validation("kind 'income' veya 'expense' olmalı"));
+    }
+    let label = label.trim().to_string();
+    if label.is_empty() {
+        return Err(AppError::validation("Etiket boş olamaz"));
+    }
+    if !amount.is_finite() {
+        return Err(AppError::validation("Tutar geçersiz"));
+    }
+    let currency = currency.trim().to_uppercase();
+    if currency.is_empty() {
+        return Err(AppError::validation("Para birimi boş olamaz"));
+    }
+    if parse_ym(&start_ym).is_none() {
+        return Err(AppError::validation("Başlangıç ayı geçersiz (YYYY-MM)"));
+    }
+    if let Some(ref e) = end_ym {
+        if !e.trim().is_empty() && parse_ym(e).is_none() {
+            return Err(AppError::validation("Bitiş ayı geçersiz (YYYY-MM)"));
+        }
+        if !e.trim().is_empty() && e < &start_ym {
+            return Err(AppError::validation("Bitiş ayı başlangıçtan önce olamaz"));
+        }
+    }
+    let end_ym_clean = end_ym
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty());
+
+    // Tarihsel kur kilit — start_ym ay ortası için (best-effort, opsiyonel)
+    let fx_to_usd: Option<f64> = match ym_to_mid_iso(&start_ym) {
+        Some(date_iso) => crate::services::frankfurter::fetch_to_usd_at(
             &date_iso,
-            &resolved_currency,
+            &currency,
         )
         .await
-        {
-            Ok(v) if v > 0.0 => Some(v),
-            Ok(_) => None,
-            Err(e) => {
-                log::warn!(
-                    "[birik] frankfurter historical fail (date={date_iso}, ccy={resolved_currency}): {e}"
-                );
-                None
-            }
-        },
+        .ok()
+        .filter(|v| *v > 0.0),
         None => None,
     };
 
-    let row: BudgetEntry = sqlx::query_as(&format!(
-        "INSERT INTO budget_entries
-            (budget_id, year_month, income, expense, note, recorded_at, currency, fx_to_usd)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-         ON CONFLICT(budget_id, year_month) DO UPDATE SET
-            income = excluded.income,
-            expense = excluded.expense,
-            note = excluded.note,
-            recorded_at = excluded.recorded_at,
-            currency = excluded.currency,
-            fx_to_usd = excluded.fx_to_usd
-         RETURNING {ENTRY_COLS}"
-    ))
-    .bind(budget_id)
-    .bind(year_month)
-    .bind(income)
-    .bind(expense)
-    .bind(&note)
-    .bind(now_secs())
-    .bind(&resolved_currency)
-    .bind(fx_to_usd)
-    .fetch_one(&db.pool)
-    .await?;
+    let row: BudgetLine = if let Some(line_id) = id {
+        sqlx::query_as(&format!(
+            "UPDATE budget_lines
+             SET kind = ?, label = ?, amount = ?, currency = ?,
+                 start_ym = ?, end_ym = ?, fx_to_usd = ?, note = ?
+             WHERE id = ? AND budget_id = ?
+             RETURNING {LINE_COLS}"
+        ))
+        .bind(&kind)
+        .bind(&label)
+        .bind(amount)
+        .bind(&currency)
+        .bind(&start_ym)
+        .bind(&end_ym_clean)
+        .bind(fx_to_usd)
+        .bind(&note)
+        .bind(line_id)
+        .bind(budget_id)
+        .fetch_optional(&db.pool)
+        .await?
+        .ok_or_else(|| AppError::not_found(format!("Bütçe satırı bulunamadı: id={line_id}")))?
+    } else {
+        sqlx::query_as(&format!(
+            "INSERT INTO budget_lines
+                (budget_id, kind, label, amount, currency, start_ym, end_ym,
+                 fx_to_usd, note, created_at)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+             RETURNING {LINE_COLS}"
+        ))
+        .bind(budget_id)
+        .bind(&kind)
+        .bind(&label)
+        .bind(amount)
+        .bind(&currency)
+        .bind(&start_ym)
+        .bind(&end_ym_clean)
+        .bind(fx_to_usd)
+        .bind(&note)
+        .bind(now_secs())
+        .fetch_one(&db.pool)
+        .await?
+    };
     Ok(row)
 }
 
 #[tauri::command]
-pub async fn list_budget_entries(
+pub async fn list_budget_lines(
     db: State<'_, Db>,
     budget_id: i64,
-) -> AppResult<Vec<BudgetEntry>> {
-    let rows: Vec<BudgetEntry> = sqlx::query_as(&format!(
-        "SELECT {ENTRY_COLS} FROM budget_entries
+) -> AppResult<Vec<BudgetLine>> {
+    let rows: Vec<BudgetLine> = sqlx::query_as(&format!(
+        "SELECT {LINE_COLS} FROM budget_lines
          WHERE budget_id = ?
-         ORDER BY year_month DESC"
+         ORDER BY kind, start_ym, label"
     ))
     .bind(budget_id)
     .fetch_all(&db.pool)
@@ -444,19 +552,248 @@ pub async fn list_budget_entries(
 }
 
 #[tauri::command]
-pub async fn delete_budget_entry(
+pub async fn delete_budget_line(db: State<'_, Db>, id: i64) -> AppResult<()> {
+    let res = sqlx::query("DELETE FROM budget_lines WHERE id = ?")
+        .bind(id)
+        .execute(&db.pool)
+        .await?;
+    if res.rows_affected() == 0 {
+        return Err(AppError::not_found(format!("Bütçe satırı bulunamadı: id={id}")));
+    }
+    Ok(())
+}
+
+/// Bir ayın grafikte interpole edilip edilmeyeceğini belirler.
+/// interpolate=true → o ayın değerleri komşu ayların ortalamasıyla hesaplanır,
+/// grafikte gri nokta olarak görünür.
+#[tauri::command]
+pub async fn set_budget_month_override(
     db: State<'_, Db>,
     budget_id: i64,
     year_month: String,
+    interpolate: bool,
 ) -> AppResult<()> {
+    if parse_ym(&year_month).is_none() {
+        return Err(AppError::validation("year_month geçersiz (YYYY-MM)"));
+    }
     sqlx::query(
-        "DELETE FROM budget_entries WHERE budget_id = ? AND year_month = ?",
+        "INSERT INTO budget_month_overrides (budget_id, year_month, interpolate)
+         VALUES (?, ?, ?)
+         ON CONFLICT(budget_id, year_month) DO UPDATE SET interpolate = excluded.interpolate",
     )
     .bind(budget_id)
     .bind(year_month)
+    .bind(if interpolate { 1_i64 } else { 0 })
     .execute(&db.pool)
     .await?;
     Ok(())
+}
+
+#[tauri::command]
+pub async fn list_budget_month_overrides(
+    db: State<'_, Db>,
+    budget_id: i64,
+) -> AppResult<Vec<BudgetMonthOverride>> {
+    let rows: Vec<BudgetMonthOverride> = sqlx::query_as(
+        "SELECT budget_id, year_month, interpolate FROM budget_month_overrides
+         WHERE budget_id = ?",
+    )
+    .bind(budget_id)
+    .fetch_all(&db.pool)
+    .await?;
+    Ok(rows)
+}
+
+/* ----------------------------------------------------------------
+ * Aylık özet (chart için)
+ * ---------------------------------------------------------------- */
+
+#[derive(Debug, Clone, Serialize)]
+pub struct MonthlyBudget {
+    pub year_month: String,
+    pub income_display: f64,
+    pub expense_display: f64,
+    pub net_display: f64,
+    /// true = bu ayın değerleri interpole edilmiş (gri görünür).
+    pub is_interpolated: bool,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct BudgetPlan {
+    pub budget_id: i64,
+    pub display_currency: String,
+    pub months: Vec<MonthlyBudget>,
+}
+
+/// Bütçe line item'larından aylık özet üretir.
+/// `future_months`: bugünden itibaren kaç ay ileri göstereceğiz.
+/// Geçmiş: line item'ların gerçek minimum start_ym'sinden bugüne kadar.
+#[tauri::command]
+pub async fn compute_budget_plan(
+    db: State<'_, Db>,
+    budget_id: i64,
+    display_currency: String,
+    future_months: Option<i64>,
+) -> AppResult<BudgetPlan> {
+    let display = display_currency.to_uppercase();
+    let future = future_months.unwrap_or(12).clamp(0, 240);
+
+    let lines: Vec<BudgetLine> = sqlx::query_as(&format!(
+        "SELECT {LINE_COLS} FROM budget_lines WHERE budget_id = ?"
+    ))
+    .bind(budget_id)
+    .fetch_all(&db.pool)
+    .await?;
+
+    let overrides: Vec<BudgetMonthOverride> = sqlx::query_as(
+        "SELECT budget_id, year_month, interpolate FROM budget_month_overrides
+         WHERE budget_id = ?",
+    )
+    .bind(budget_id)
+    .fetch_all(&db.pool)
+    .await?;
+    let interpolate_set: std::collections::HashSet<String> = overrides
+        .iter()
+        .filter(|o| o.interpolate == 1)
+        .map(|o| o.year_month.clone())
+        .collect();
+
+    if lines.is_empty() {
+        return Ok(BudgetPlan {
+            budget_id,
+            display_currency: display,
+            months: vec![],
+        });
+    }
+
+    // Range hesabı: min(line.start_ym) .. max(today + future)
+    let today = chrono::Utc::now().date_naive();
+    let today_y = today.year() as i32;
+    let today_m = today.month();
+    let earliest_line: String = lines
+        .iter()
+        .map(|l| l.start_ym.clone())
+        .min()
+        .unwrap_or_else(|| format!("{:04}-{:02}", today_y, today_m));
+    let (start_y, start_m) =
+        parse_ym(&earliest_line).unwrap_or((today_y, today_m));
+
+    let end_year = today_y + (today_m as i64 + future) as i32 / 12;
+    let end_month_raw = (today_m as i64 - 1 + future) % 12 + 1;
+    let end_year_adj = today_y + ((today_m as i64 - 1 + future) / 12) as i32;
+    let _ = end_year; // unused
+    let end_y = end_year_adj;
+    let end_m = end_month_raw as u32;
+
+    // Currency'lere göre FX rates (display'e çevirmek için bugünkü FX)
+    let mut current_fx = crate::services::fx::fetch_rates().await.ok();
+    if let Some(ref mut fx) = current_fx {
+        if display == "BTC" || display == "ETH" {
+            crate::commands::calc::enrich_with_crypto(fx, &display, &db.pool).await;
+        }
+    }
+
+    // Bir ay (y, m) için line item'lardan total income/expense hesabı
+    let month_total = |y: i32, m: u32, kind: &str| -> f64 {
+        let ym = format!("{y:04}-{m:02}");
+        let mut total_display = 0.0;
+        for l in &lines {
+            if l.kind != kind {
+                continue;
+            }
+            if l.start_ym.as_str() > ym.as_str() {
+                continue;
+            }
+            if let Some(end) = &l.end_ym {
+                if ym.as_str() > end.as_str() {
+                    continue;
+                }
+            }
+            // line.currency → display
+            let v = crate::commands::calc::convert(
+                l.amount,
+                &l.currency,
+                &display,
+                current_fx.as_ref(),
+            );
+            total_display += v;
+        }
+        total_display
+    };
+
+    // Önce raw aylar listesi: [(y,m, income, expense)]
+    let mut raw: Vec<(i32, u32, f64, f64)> = Vec::new();
+    let mut y = start_y;
+    let mut m = start_m;
+    loop {
+        let income = month_total(y, m, "income");
+        let expense = month_total(y, m, "expense");
+        raw.push((y, m, income, expense));
+        if y == end_y && m == end_m {
+            break;
+        }
+        m += 1;
+        if m > 12 {
+            m = 1;
+            y += 1;
+        }
+        // Sonsuz loop koruması (240+ ay)
+        if raw.len() > 600 {
+            break;
+        }
+    }
+
+    // İkinci pass: interpolation (override flag + komşu ortalaması)
+    let mut months: Vec<MonthlyBudget> = Vec::with_capacity(raw.len());
+    for (i, (y, m, inc, exp)) in raw.iter().enumerate() {
+        let ym = format!("{y:04}-{m:02}");
+        let is_marked = interpolate_set.contains(&ym);
+        if is_marked {
+            // Komşu ayların ortalaması — gri nokta
+            let prev_data = raw
+                .iter()
+                .take(i)
+                .rev()
+                .find(|(yy, mm, _, _)| {
+                    let pym = format!("{yy:04}-{mm:02}");
+                    !interpolate_set.contains(&pym)
+                });
+            let next_data = raw
+                .iter()
+                .skip(i + 1)
+                .find(|(yy, mm, _, _)| {
+                    let pym = format!("{yy:04}-{mm:02}");
+                    !interpolate_set.contains(&pym)
+                });
+            let (inc_interp, exp_interp) = match (prev_data, next_data) {
+                (Some(p), Some(n)) => ((p.2 + n.2) / 2.0, (p.3 + n.3) / 2.0),
+                (Some(p), None) => (p.2, p.3),
+                (None, Some(n)) => (n.2, n.3),
+                (None, None) => (*inc, *exp),
+            };
+            months.push(MonthlyBudget {
+                year_month: ym,
+                income_display: inc_interp,
+                expense_display: exp_interp,
+                net_display: inc_interp - exp_interp,
+                is_interpolated: true,
+            });
+        } else {
+            months.push(MonthlyBudget {
+                year_month: ym,
+                income_display: *inc,
+                expense_display: *exp,
+                net_display: *inc - *exp,
+                is_interpolated: false,
+            });
+        }
+    }
+
+    Ok(BudgetPlan {
+        budget_id,
+        display_currency: display,
+        months,
+    })
 }
 
 /* ----------------------------------------------------------------
@@ -488,7 +825,15 @@ pub async fn project_budget(
     .ok_or_else(|| AppError::not_found(format!("Bütçe bulunamadı: id={budget_id}")))?;
 
     let currency = budget.currency.clone();
-    let monthly_savings = (budget.monthly_income - budget.monthly_expense).max(0.0);
+    // Aylık eklenen tutar = investment_entries ortalaması (budget income/expense
+    // değil — kullanıcı net dedi: "gelir - gider = yatırım miktarı diyemeyiz").
+    let monthly_savings = compute_avg_monthly_investment(
+        &db.pool,
+        budget.profile_id,
+        &currency,
+    )
+    .await
+    .unwrap_or(0.0);
 
     // Portföy değeri budget currency'sinde
     let portfolios: Vec<crate::db::models::Portfolio> = match budget.profile_id {

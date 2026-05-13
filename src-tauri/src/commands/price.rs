@@ -247,7 +247,52 @@ pub async fn refresh_all_prices(
                     }
                 }
             }
-            "fx" | "commodity" => {
+            "commodity" => {
+                // Önce Yahoo (kıymetli metaller için futures sembol — search'te
+                // external_id'ye yazılır: GC=F, SI=F, PL=F, PA=F). external_id
+                // yoksa veya Yahoo başarısızsa TCMB'ye düş (XAU için).
+                let yahoo_sym = asset.external_id.as_deref().filter(|s| !s.is_empty());
+                let mut got: Option<PriceResult> = None;
+                if let Some(ys) = yahoo_sym {
+                    if let Ok(r) = yahoo::fetch_price(ys).await {
+                        let pct = match r.previous_close {
+                            Some(prev) if prev > 0.0 => Some((r.price - prev) / prev * 100.0),
+                            _ => None,
+                        };
+                        got = Some(PriceResult {
+                            price: r.price,
+                            currency: r.currency, // futures sembolleri USD döner
+                            source: "yahoo".into(),
+                            cache_hit: false,
+                            fetched_at: crate::commands::now_secs(),
+                            change_24h_pct: pct,
+                        });
+                    }
+                }
+                if got.is_none() {
+                    // TCMB fallback — XAU gram altın için çalışır
+                    if fx.is_none() {
+                        fx = Some(crate::services::fx::fetch_rates().await?);
+                    }
+                    let rates = &fx.as_ref().unwrap().rates;
+                    let v = rates.get(&asset.symbol.to_uppercase()).copied().ok_or_else(|| {
+                        AppError::not_found(format!(
+                            "{} için fiyat bulunamadı (Yahoo + TCMB)",
+                            asset.symbol
+                        ))
+                    })?;
+                    got = Some(PriceResult {
+                        price: v,
+                        currency: "TRY".into(),
+                        source: "tcmb".into(),
+                        cache_hit: false,
+                        fetched_at: crate::commands::now_secs(),
+                        change_24h_pct: None,
+                    });
+                }
+                got.unwrap()
+            }
+            "fx" => {
                 if fx.is_none() {
                     fx = Some(crate::services::fx::fetch_rates().await?);
                 }

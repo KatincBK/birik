@@ -44,8 +44,8 @@ pub struct PositionSummary {
 /// Algoritma (Average Cost Method):
 /// - Buy: total_cost += qty*price + fee; balance += qty
 /// - Sell: realized = (price - avg_cost)*qty - fee
-///         total_cost -= avg_cost*qty (proporsiyonel düşür)
-///         balance -= qty
+///   total_cost -= avg_cost*qty (proporsiyonel düşür)
+///   balance -= qty
 /// - Passive income: balance += qty (bedava), cost değişmez
 ///
 /// is_deleted=1 olanlar atılır.
@@ -602,9 +602,36 @@ async fn load_transactions(pool: &SqlitePool, asset_id: i64) -> AppResult<Vec<Tr
     Ok(rows)
 }
 
-/// BTC veya ETH için canlı USD fiyatı: önce CoinGecko, başarısızsa
-/// price_cache (kullanıcının portföyündeki BTC/ETH varsa son cache).
-/// Sonuç TRY köprüsüne enjekte edilir.
+/// BTC/ETH USD fiyatı için process-wide in-memory cache. 60 sn TTL —
+/// currency switch'lerinde Binance'a tekrar tekrar gitmesin. WebSocket
+/// canlı tick'i zaten price_cache'i 1-2 sn'de bir günceller; cache miss
+/// fall through Binance + CoinGecko + price_cache zinciri.
+struct CryptoPriceCache {
+    btc_usd: Option<(f64, i64)>, // (price, unix_secs)
+    eth_usd: Option<(f64, i64)>,
+}
+
+static CRYPTO_PRICE_CACHE: std::sync::OnceLock<tokio::sync::Mutex<CryptoPriceCache>> =
+    std::sync::OnceLock::new();
+
+const CRYPTO_CACHE_TTL_SECS: i64 = 60;
+
+fn crypto_cache() -> &'static tokio::sync::Mutex<CryptoPriceCache> {
+    CRYPTO_PRICE_CACHE.get_or_init(|| {
+        tokio::sync::Mutex::new(CryptoPriceCache {
+            btc_usd: None,
+            eth_usd: None,
+        })
+    })
+}
+
+/// BTC veya ETH için USD fiyatı (TRY köprüsüne enjekte etmek için):
+///   1. In-memory cache (60s TTL) — currency switch instant
+///   2. price_cache (eğer kullanıcının BTC/ETH asset'i varsa, WebSocket
+///      tarafından canlı güncellenir; ortalama 1-2 sn fresh)
+///   3. Binance REST canlı
+///   4. CoinGecko fallback
+///   5. price_cache (stale fallback)
 pub async fn enrich_with_crypto(
     rates: &mut tcmb::FxRates,
     code: &str,
@@ -624,13 +651,55 @@ pub async fn enrich_with_crypto(
         _ => return,
     };
 
-    // 1. Binance REST canlı (rate limit dostu)
-    let mut usd_price: Option<f64> = match binance_rest::fetch_quote(&key).await {
-        Ok(q) if q.usd_price > 0.0 => Some(q.usd_price),
-        _ => None,
-    };
+    let now_secs = chrono::Utc::now().timestamp();
 
-    // 2. Fallback: CoinGecko (rate limited 429 sıkça gelir)
+    // 1) In-memory cache (process-wide, 60s TTL)
+    {
+        let guard = crypto_cache().lock().await;
+        let slot = match key.as_str() {
+            "BTC" => guard.btc_usd,
+            "ETH" => guard.eth_usd,
+            _ => None,
+        };
+        if let Some((price, ts)) = slot {
+            if now_secs - ts < CRYPTO_CACHE_TTL_SECS && price > 0.0 {
+                rates.rates.insert(key, price * usd_try);
+                return;
+            }
+        }
+    }
+
+    // 2) price_cache fresh? (WebSocket sayesinde sürekli güncellenir, hızlı)
+    let cached: Option<(f64, i64)> = sqlx::query_as(
+        "SELECT pc.price, pc.fetched_at FROM price_cache pc
+         JOIN assets a ON a.id = pc.asset_id
+         WHERE UPPER(a.symbol) = ? AND UPPER(pc.currency) = 'USD'
+         ORDER BY pc.fetched_at DESC LIMIT 1",
+    )
+    .bind(&key)
+    .fetch_optional(pool)
+    .await
+    .ok()
+    .flatten();
+
+    let mut usd_price: Option<f64> = None;
+    if let Some((v, ts)) = cached {
+        // 5 dk içindeyse fresh kabul
+        if v > 0.0 && (now_secs - ts) < 5 * 60 {
+            usd_price = Some(v);
+        }
+    }
+
+    // 3) Binance canlı (cache stale veya yoksa)
+    if usd_price.is_none() {
+        if let Ok(q) = binance_rest::fetch_quote(&key).await {
+            if q.usd_price > 0.0 {
+                usd_price = Some(q.usd_price);
+            }
+        }
+    }
+
+    // 4) CoinGecko fallback
     if usd_price.is_none() {
         if let Ok(p) = coingecko::fetch_price(cg_id).await {
             if p.usd > 0.0 {
@@ -639,32 +708,29 @@ pub async fn enrich_with_crypto(
         }
     }
 
-    // 3. Fallback: price_cache (kullanıcının BTC/ETH asset'i varsa son fiyat)
+    // 5) Stale price_cache fallback (5+ dk eski olsa bile)
     if usd_price.is_none() {
-        let cached: Option<(f64,)> = sqlx::query_as(
-            "SELECT pc.price FROM price_cache pc
-             JOIN assets a ON a.id = pc.asset_id
-             WHERE UPPER(a.symbol) = ? AND UPPER(pc.currency) = 'USD'
-             ORDER BY pc.fetched_at DESC LIMIT 1",
-        )
-        .bind(&key)
-        .fetch_optional(pool)
-        .await
-        .ok()
-        .flatten();
-        if let Some((v,)) = cached {
+        if let Some((v, _)) = cached {
             if v > 0.0 {
-                log::info!("[birik] enrich_with_crypto cache fallback for {key}: {v}");
+                log::info!("[birik] enrich_with_crypto stale cache fallback for {key}: {v}");
                 usd_price = Some(v);
             }
         }
     }
 
     if let Some(usd) = usd_price {
-        // 1 BTC için TRY = BTC_USD * USD_TRY
+        // In-memory cache yaz
+        {
+            let mut guard = crypto_cache().lock().await;
+            match key.as_str() {
+                "BTC" => guard.btc_usd = Some((usd, now_secs)),
+                "ETH" => guard.eth_usd = Some((usd, now_secs)),
+                _ => {}
+            }
+        }
         rates.rates.insert(key, usd * usd_try);
     } else {
-        log::warn!("[birik] enrich_with_crypto FAILED for {key} — CoinGecko + cache miss");
+        log::warn!("[birik] enrich_with_crypto FAILED for {key} — tüm fallback'ler eksik");
     }
 }
 

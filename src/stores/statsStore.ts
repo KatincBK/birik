@@ -6,17 +6,19 @@ import { usePortfolioStore } from "./portfolioStore";
 export const ALL_KEY = -1 as const;
 
 /**
- * `statsKey` — UI'dan gelen activeId (number|null) → store kullanılan
- * sayısal anahtar. null → ALL_KEY.
+ * `statsKey` — UI'dan gelen (activeId, displayCurrency) → store anahtarı.
+ * Currency key'in parçası: USD ve BTC stats'i ayrı cache'lenir; currency
+ * değişince eski değer flash etmesin.
  */
-export function statsKey(activeId: number | null): number {
-  return activeId == null ? ALL_KEY : activeId;
+export function statsKey(activeId: number | null, currency: string): string {
+  const id = activeId == null ? ALL_KEY : activeId;
+  return `${id}|${currency.toUpperCase()}`;
 }
 
 type StatsState = {
-  byPortfolio: Record<number, PortfolioStats | null>;
-  loading: Record<number, boolean>;
-  lastRefresh: Record<number, number | null>;
+  byPortfolio: Record<string, PortfolioStats | null>;
+  loading: Record<string, boolean>;
+  lastRefresh: Record<string, number | null>;
 
   recompute: (
     activeId: number | null,
@@ -27,10 +29,7 @@ type StatsState = {
     displayCurrency: string
   ) => Promise<void>;
   /** Binance WebSocket tick — bir asset'in fiyatını runtime'da patch'le.
-   *  market_value/unrealized_pl da yeniden hesaplanır (display currency
-   *  conversion mevcut FX rate'lerle yapılamaz, sadece price_currency==
-   *  display_currency ise güncellenir; aksi halde sadece current_price
-   *  değişir, kullanıcı yenile'ye basınca tam recompute olur).  */
+   *  Tüm currency-keyed entries için aynı asset'i bulup günceller. */
   applyTick: (assetId: number, price: number, change24hPct: number) => void;
 };
 
@@ -101,7 +100,7 @@ export const useStatsStore = create<StatsState>((set) => ({
   lastRefresh: {},
 
   recompute: async (activeId, displayCurrency) => {
-    const key = statsKey(activeId);
+    const key = statsKey(activeId, displayCurrency);
     set((s) => ({ loading: { ...s.loading, [key]: true } }));
     try {
       const stats =
@@ -120,15 +119,15 @@ export const useStatsStore = create<StatsState>((set) => ({
 
   applyTick: (assetId, price, change24hPct) => {
     set((s) => {
-      // Tüm portföy stats'lerinde bu asset'i bul ve güncelle
-      const next: Record<number, PortfolioStats | null> = { ...s.byPortfolio };
-      for (const [keyStr, stats] of Object.entries(s.byPortfolio)) {
+      // Tüm currency-keyed entries için aynı asset'i bul ve güncelle.
+      // (Binance tick'i USD bazlı, market_value oranlanarak güncellenir;
+      // tam doğrulamak için recompute beklenir.)
+      const next: Record<string, PortfolioStats | null> = { ...s.byPortfolio };
+      for (const [key, stats] of Object.entries(s.byPortfolio)) {
         if (!stats) continue;
         const idx = stats.assets.findIndex((a) => a.asset_id === assetId);
         if (idx < 0) continue;
         const a = stats.assets[idx];
-        // Sadece USD bazlı (Binance hep USD) ve display ya USD ya da
-        // FX bridge basit: market_value oranlanır
         const newPrice = price;
         const oldPrice = a.current_price ?? newPrice;
         const ratio = oldPrice > 0 ? newPrice / oldPrice : 1;
@@ -150,7 +149,6 @@ export const useStatsStore = create<StatsState>((set) => ({
         const newAssets = [...stats.assets];
         newAssets[idx] = newAsset;
 
-        // Toplam yeniden hesapla
         let totalValue = 0;
         let totalUnrealized = 0;
         for (const x of newAssets) {
@@ -158,7 +156,7 @@ export const useStatsStore = create<StatsState>((set) => ({
           if (x.unrealized_pl_display != null) totalUnrealized += x.unrealized_pl_display;
         }
 
-        next[Number(keyStr)] = {
+        next[key] = {
           ...stats,
           assets: newAssets,
           total_value: totalValue,
@@ -170,7 +168,7 @@ export const useStatsStore = create<StatsState>((set) => ({
   },
 
   refreshLive: async (activeId, displayCurrency) => {
-    const key = statsKey(activeId);
+    const key = statsKey(activeId, displayCurrency);
     set((s) => ({ loading: { ...s.loading, [key]: true } }));
     try {
       let stats: PortfolioStats;

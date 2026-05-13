@@ -39,17 +39,29 @@ pub struct Budget {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, FromRow)]
-pub struct BudgetEntry {
+pub struct BudgetLine {
+    pub id: i64,
+    pub budget_id: i64,
+    /// 'income' | 'expense'
+    pub kind: String,
+    pub label: String,
+    pub amount: f64,
+    pub currency: String,
+    /// 'YYYY-MM' — line item bu aydan itibaren geçerli
+    pub start_ym: String,
+    /// 'YYYY-MM' nullable — NULL ise açık uçlu (sonsuza kadar)
+    pub end_ym: Option<String>,
+    /// start_ym ay ortası için USD kilit (reporting için, opsiyonel)
+    pub fx_to_usd: Option<f64>,
+    pub note: Option<String>,
+    pub created_at: i64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, FromRow)]
+pub struct BudgetMonthOverride {
     pub budget_id: i64,
     pub year_month: String,
-    pub income: f64,
-    pub expense: f64,
-    pub note: Option<String>,
-    pub recorded_at: i64,
-    /// Bu entry'nin native currency'si. NULL = eski kayıt (bütçe currency'si varsayılır)
-    pub currency: Option<String>,
-    /// 1 native currency = X USD, entry tarihindeki kilit oran. NULL = current FX fallback
-    pub fx_to_usd: Option<f64>,
+    pub interpolate: i64,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, FromRow)]

@@ -9,6 +9,8 @@ import {
   Key,
   Eye,
   EyeOff,
+  X,
+  Coins,
 } from "lucide-react";
 import { save, open } from "@tauri-apps/plugin-dialog";
 import { readTextFile, writeTextFile } from "@tauri-apps/plugin-fs";
@@ -24,8 +26,10 @@ import {
   buttonGhost,
   buttonPrimary,
   buttonSecondary,
+  inputClass,
 } from "../components/Modal";
 import { playSound } from "../lib/sounds";
+import { DEFAULT_STABLECOINS, DEFAULT_COMMODITY_TOKENS } from "../lib/cashLike";
 
 const ALL_CURRENCIES: Currency[] = ["USD", "TRY", "EUR", "BTC", "ETH"];
 
@@ -37,6 +41,14 @@ export function Settings() {
   const toggleSound = useSettingsStore((s) => s.toggleSound);
   const refreshIntervalMin = useSettingsStore((s) => s.refreshIntervalMin);
   const setRefreshInterval = useSettingsStore((s) => s.setRefreshInterval);
+  const budgetFutureMonths = useSettingsStore((s) => s.budgetFutureMonths);
+  const setBudgetFutureMonths = useSettingsStore((s) => s.setBudgetFutureMonths);
+  const [budgetFutureMonthsInput, setBudgetFutureMonthsInput] = useState(
+    budgetFutureMonths.toString()
+  );
+  useEffect(() => {
+    setBudgetFutureMonthsInput(budgetFutureMonths.toString());
+  }, [budgetFutureMonths]);
 
   const [busy, setBusy] = useState<string | null>(null);
 
@@ -106,6 +118,54 @@ export function Settings() {
     } finally {
       setBusy(null);
     }
+  };
+
+  // Cash-like sembol listesi (kullanıcı override)
+  const cashExtraSymbols = useSettingsStore((s) => s.cashExtraSymbols);
+  const addCashSymbol = useSettingsStore((s) => s.addCashSymbol);
+  const removeCashSymbol = useSettingsStore((s) => s.removeCashSymbol);
+  const [newCashSymbol, setNewCashSymbol] = useState("");
+  const onAddCash = () => {
+    const v = newCashSymbol.trim().toUpperCase();
+    if (!v) return;
+    if (cashExtraSymbols.includes(v)) {
+      toast.error("Bu sembol zaten listede");
+      playSound("error");
+      return;
+    }
+    if ((DEFAULT_STABLECOINS as readonly string[]).includes(v)) {
+      toast.info("Bu sembol zaten varsayılan stablecoin listesinde");
+      playSound("click");
+      setNewCashSymbol("");
+      return;
+    }
+    addCashSymbol(v);
+    setNewCashSymbol("");
+    playSound("ding");
+  };
+
+  // Commodity-like sembol listesi (tokenize altın/gümüş için)
+  const commodityExtraSymbols = useSettingsStore((s) => s.commodityExtraSymbols);
+  const addCommoditySymbol = useSettingsStore((s) => s.addCommoditySymbol);
+  const removeCommoditySymbol = useSettingsStore((s) => s.removeCommoditySymbol);
+  const [newCommoditySymbol, setNewCommoditySymbol] = useState("");
+  const onAddCommodity = () => {
+    const v = newCommoditySymbol.trim().toUpperCase();
+    if (!v) return;
+    if (commodityExtraSymbols.includes(v)) {
+      toast.error("Bu sembol zaten listede");
+      playSound("error");
+      return;
+    }
+    if ((DEFAULT_COMMODITY_TOKENS as readonly string[]).includes(v)) {
+      toast.info("Bu sembol zaten varsayılan listede");
+      playSound("click");
+      setNewCommoditySymbol("");
+      return;
+    }
+    addCommoditySymbol(v);
+    setNewCommoditySymbol("");
+    playSound("ding");
   };
 
   const toggleCurrency = async (c: Currency) => {
@@ -194,7 +254,7 @@ export function Settings() {
       const result = await api.importData(json, mode);
       playSound("ding");
       toast.success("İçe aktarma tamam", {
-        description: `${result.portfolios_added} portföy, ${result.assets_added} varlık, ${result.transactions_added} işlem, ${result.alerts_added} alarm, ${result.goals_added} hedef ${mode === "replace" ? "yüklendi" : "eklendi"}`,
+        description: `${result.portfolios_added} portföy, ${result.assets_added} varlık, ${result.transactions_added} işlem, ${result.alerts_added} alarm, ${result.investment_entries_added} yatırım kaydı ${mode === "replace" ? "yüklendi" : "eklendi"}`,
       });
     } catch (err) {
       playSound("error");
@@ -268,6 +328,170 @@ export function Settings() {
         </div>
       </Section>
 
+      <Section title="Sembol kategorileri">
+        <div>
+          <div className="flex items-center gap-1.5">
+            <Coins className="h-3.5 w-3.5 text-(--color-text-tertiary)" />
+            <span className="text-[11px] font-medium tracking-[0.05em] text-(--color-text-secondary) uppercase">
+              Nakit sembolleri
+            </span>
+          </div>
+          <p className="mt-1 text-xs text-(--color-text-tertiary)">
+            Tüm fiat para birimleri (USD, EUR, TRY…) ve yaygın stablecoin'ler
+            (USDT, USDC, DAI…) zaten "Nakit" kategorisinde sayılır. Burada kendi
+            tokenlarını ekleyebilirsin — varlık dağılım pastasında "Nakit" diliminin
+            altına düşer.
+          </p>
+
+          {/* Varsayılan liste — info chip'ler, tıklanmaz */}
+          <div className="mt-3">
+            <div className="text-[10px] tracking-[0.05em] text-(--color-text-tertiary) uppercase mb-1.5">
+              Varsayılan
+            </div>
+            <div className="flex flex-wrap gap-1">
+              {DEFAULT_STABLECOINS.map((s) => (
+                <span
+                  key={s}
+                  className="rounded-md border border-(--color-border-subtle) bg-(--color-bg-base) px-2 py-0.5 text-[11px] tabular text-(--color-text-tertiary)"
+                  title="Varsayılan stablecoin — kaldırılamaz"
+                >
+                  {s}
+                </span>
+              ))}
+            </div>
+          </div>
+
+          {/* Kullanıcının eklediği extra'lar */}
+          <div className="mt-3">
+            <div className="text-[10px] tracking-[0.05em] text-(--color-text-tertiary) uppercase mb-1.5">
+              Senin eklediklerin
+            </div>
+            <div className="flex flex-wrap items-center gap-1.5">
+              {cashExtraSymbols.length === 0 && (
+                <span className="text-xs text-(--color-text-tertiary)">
+                  henüz yok
+                </span>
+              )}
+              {cashExtraSymbols.map((s) => (
+                <span
+                  key={s}
+                  className="inline-flex items-center gap-1 rounded-md bg-(--color-accent)/12 px-2 py-0.5 text-[11px] font-medium tabular text-(--color-accent)"
+                >
+                  {s}
+                  <button
+                    onClick={() => {
+                      removeCashSymbol(s);
+                      playSound("swoosh");
+                    }}
+                    aria-label={`${s} kaldır`}
+                    className="text-(--color-accent)/70 hover:text-(--color-accent)"
+                  >
+                    <X className="h-3 w-3" />
+                  </button>
+                </span>
+              ))}
+            </div>
+            <div className="mt-2 flex gap-2">
+              <input
+                value={newCashSymbol}
+                onChange={(e) => setNewCashSymbol(e.target.value.toUpperCase())}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter") {
+                    e.preventDefault();
+                    onAddCash();
+                  }
+                }}
+                placeholder="örn: USDE, GHO"
+                className={cn(inputClass, "max-w-[200px] flex-1")}
+              />
+              <button onClick={onAddCash} className={buttonSecondary}>
+                Ekle
+              </button>
+            </div>
+          </div>
+        </div>
+
+        {/* Emtia (tokenize altın/gümüş) — paralel yapı */}
+        <div className="mt-6 border-t border-(--color-border-subtle) pt-5">
+          <div className="flex items-center gap-1.5">
+            <Coins className="h-3.5 w-3.5 text-(--color-text-tertiary)" />
+            <span className="text-[11px] font-medium tracking-[0.05em] text-(--color-text-secondary) uppercase">
+              Emtia sembolleri (tokenize)
+            </span>
+          </div>
+          <p className="mt-1 text-xs text-(--color-text-tertiary)">
+            Fiziki altın/gümüşe bağlı kripto tokenları (PAXG, XAUT…) kripto
+            değil "Emtia" kategorisinde gösterilsin. Buradaki liste varsayılana
+            eklenir.
+          </p>
+
+          <div className="mt-3">
+            <div className="text-[10px] tracking-[0.05em] text-(--color-text-tertiary) uppercase mb-1.5">
+              Varsayılan
+            </div>
+            <div className="flex flex-wrap gap-1">
+              {DEFAULT_COMMODITY_TOKENS.map((s) => (
+                <span
+                  key={s}
+                  className="rounded-md border border-(--color-border-subtle) bg-(--color-bg-base) px-2 py-0.5 text-[11px] tabular text-(--color-text-tertiary)"
+                  title="Varsayılan tokenize emtia — kaldırılamaz"
+                >
+                  {s}
+                </span>
+              ))}
+            </div>
+          </div>
+
+          <div className="mt-3">
+            <div className="text-[10px] tracking-[0.05em] text-(--color-text-tertiary) uppercase mb-1.5">
+              Senin eklediklerin
+            </div>
+            <div className="flex flex-wrap items-center gap-1.5">
+              {commodityExtraSymbols.length === 0 && (
+                <span className="text-xs text-(--color-text-tertiary)">
+                  henüz yok
+                </span>
+              )}
+              {commodityExtraSymbols.map((s) => (
+                <span
+                  key={s}
+                  className="inline-flex items-center gap-1 rounded-md bg-(--color-accent)/12 px-2 py-0.5 text-[11px] font-medium tabular text-(--color-accent)"
+                >
+                  {s}
+                  <button
+                    onClick={() => {
+                      removeCommoditySymbol(s);
+                      playSound("swoosh");
+                    }}
+                    aria-label={`${s} kaldır`}
+                    className="text-(--color-accent)/70 hover:text-(--color-accent)"
+                  >
+                    <X className="h-3 w-3" />
+                  </button>
+                </span>
+              ))}
+            </div>
+            <div className="mt-2 flex gap-2">
+              <input
+                value={newCommoditySymbol}
+                onChange={(e) => setNewCommoditySymbol(e.target.value.toUpperCase())}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter") {
+                    e.preventDefault();
+                    onAddCommodity();
+                  }
+                }}
+                placeholder="örn: GOLD, METAL"
+                className={cn(inputClass, "max-w-[200px] flex-1")}
+              />
+              <button onClick={onAddCommodity} className={buttonSecondary}>
+                Ekle
+              </button>
+            </div>
+          </div>
+        </div>
+      </Section>
+
       <Section title="Ses & yenileme">
         <Row
           label="Sesler"
@@ -312,6 +536,31 @@ export function Settings() {
                   {m} dk
                 </button>
               ))}
+            </div>
+          }
+        />
+      </Section>
+
+      <Section title="Bütçe planlama">
+        <Row
+          label="İleri görünür ay sayısı"
+          hint="Bütçe sayfasında bugünden itibaren kaç ay ileri görünsün. Geçmiş veriler her zaman tam görünür."
+          right={
+            <div className="flex items-center gap-2">
+              <input
+                inputMode="numeric"
+                value={budgetFutureMonthsInput}
+                onChange={(e) =>
+                  setBudgetFutureMonthsInput(e.target.value.replace(/[^0-9]/g, ""))
+                }
+                onBlur={() => {
+                  const n = parseInt(budgetFutureMonthsInput, 10);
+                  if (Number.isFinite(n)) setBudgetFutureMonths(n);
+                  else setBudgetFutureMonthsInput(budgetFutureMonths.toString());
+                }}
+                className="w-16 rounded-lg border border-(--color-border-subtle) bg-(--color-bg-base) px-2 py-1 text-right text-sm tabular outline-none focus:border-(--color-accent)"
+              />
+              <span className="text-sm text-(--color-text-tertiary)">ay</span>
             </div>
           }
         />

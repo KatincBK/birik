@@ -78,7 +78,6 @@ fn validate(
 }
 
 #[allow(clippy::too_many_arguments)]
-#[allow(clippy::too_many_arguments)]
 #[tauri::command]
 pub async fn create_transaction(
     db: State<'_, Db>,

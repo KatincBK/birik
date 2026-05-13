@@ -3,7 +3,7 @@ import { ArrowLeft, Plus, Trash2, X, Pencil, Bell, Columns3, GripVertical } from
 import { toast } from "sonner";
 import { useAssetStore } from "../stores/assetStore";
 import { useTransactionStore } from "../stores/transactionStore";
-import { useStatsStore } from "../stores/statsStore";
+import { useStatsStore, statsKey } from "../stores/statsStore";
 import { useSettingsStore } from "../stores/useSettingsStore";
 import { useUIStore } from "../stores/uiStore";
 import { AddTransactionModal } from "../components/AddTransactionModal";
@@ -50,12 +50,8 @@ export function AssetDetail({ assetId }: { assetId: number }) {
     api.listTransactionTags(assetId).then(setTags).catch(() => setTags([]));
   }, [assetId, txns.length]);
 
-  const filteredTxns = activeTag
-    ? txns // Etiket filtre backend'de — frontend'de listeyi yeniden çekmek yerine
-    : txns;
-  // Backend tag filtre uygulamak için ayrı fetch — basitlik için frontend filter:
-  // Asset'in tag bilgisi list_transactions'tan gelmiyor (transaction_tags ayrı tablo).
-  // Pratik çözüm: tag tıklayınca direkt api çağrısı + lokal state. Aşağıdaki effect.
+  // Etiket filtre backend'de — tag tıklayınca ayrı fetch + lokal state.
+  // transaction_tags ayrı tabloda olduğu için frontend'de filtre yapmıyoruz.
   const [taggedTxns, setTaggedTxns] = useState<Transaction[] | null>(null);
   useEffect(() => {
     if (!activeTag) {
@@ -67,13 +63,13 @@ export function AssetDetail({ assetId }: { assetId: number }) {
       .then(setTaggedTxns)
       .catch(() => setTaggedTxns([]));
   }, [activeTag, assetId, txns.length]);
-  const visibleTxns = activeTag ? (taggedTxns ?? []) : filteredTxns;
+  const visibleTxns = activeTag ? (taggedTxns ?? []) : txns;
 
+  const displayCurrency = useSettingsStore((s) => s.displayCurrency);
   const stats = useStatsStore((s) =>
-    asset ? s.byPortfolio[asset.portfolio_id] ?? null : null
+    asset ? s.byPortfolio[statsKey(asset.portfolio_id, displayCurrency)] ?? null : null
   );
   const recompute = useStatsStore((s) => s.recompute);
-  const displayCurrency = useSettingsStore((s) => s.displayCurrency);
 
   // Asset detayında recompute her zaman tek-portföy modunda olur.
   const recomputeOwner = () =>

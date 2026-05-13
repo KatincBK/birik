@@ -71,11 +71,17 @@ export function Home() {
   const budgets = useBudgetStore((s) => s.budgets);
   const activeBudget = budgets[0] ?? null;
 
-  const [summary, setSummary] = useState<HomeSummary | null>(null);
-  const [statsByPortfolio, setStatsByPortfolio] = useState<
-    Record<number, PortfolioStats>
+  // Currency-keyed cache: BTC ile USD özet aynı anda hafızada tutulur.
+  // Currency değişince eski değer flash etmez — yeni para birimi için cache
+  // varsa onu hemen göster, yoksa loading dots.
+  const [summaryByCcy, setSummaryByCcy] = useState<Record<string, HomeSummary>>({});
+  const [statsByPortfolioByCcy, setStatsByPortfolioByCcy] = useState<
+    Record<string, Record<number, PortfolioStats>>
   >({});
   const [loading, setLoading] = useState(true);
+
+  const summary = summaryByCcy[displayCurrency] ?? null;
+  const statsByPortfolio = statsByPortfolioByCcy[displayCurrency] ?? {};
   const [news, setNews] = useState<NewsBundle[]>([]);
   const [newsLoading, setNewsLoading] = useState(true);
 
@@ -107,13 +113,16 @@ export function Home() {
   // Özet + portföy bazlı detay (pasta için)
   useEffect(() => {
     if (activeProfileId == null) {
-      setSummary(null);
-      setStatsByPortfolio({});
+      setSummaryByCcy({});
+      setStatsByPortfolioByCcy({});
       setLoading(false);
       return;
     }
     let cancelled = false;
-    setLoading(true);
+    // Mevcut currency için cache yoksa loading göster; cache varsa stale-
+    // while-revalidate (loading=false, mevcut değeri göster, arkada güncelle).
+    const hasCache = summaryByCcy[displayCurrency] != null;
+    if (!hasCache) setLoading(true);
     Promise.all([
       api.homeSummary(activeProfileId, displayCurrency),
       Promise.all(
@@ -124,10 +133,10 @@ export function Home() {
     ])
       .then(([s, entries]) => {
         if (cancelled) return;
-        setSummary(s);
+        setSummaryByCcy((cur) => ({ ...cur, [displayCurrency]: s }));
         const m: Record<number, PortfolioStats> = {};
         for (const [id, st] of entries) m[id] = st;
-        setStatsByPortfolio(m);
+        setStatsByPortfolioByCcy((cur) => ({ ...cur, [displayCurrency]: m }));
       })
       .catch(() => {})
       .finally(() => {
@@ -136,6 +145,9 @@ export function Home() {
     return () => {
       cancelled = true;
     };
+    // summaryByCcy değişimini bilerek dep dışında tutuyoruz — re-fetch ihtiyacı
+    // displayCurrency / portfolios / activeProfileId değişimlerinde.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [activeProfileId, portfolios, displayCurrency]);
 
   // Haber feed flat: tüm bundle'ların item'larını süreye göre desc sıralı tek liste
@@ -204,6 +216,7 @@ export function Home() {
         <Hero
           totalValue={totalValue}
           loading={loading}
+          staleHint={loading || summary == null}
           label="Toplam yönetilen değer"
           size="lg"
         />
@@ -372,6 +385,9 @@ export function Home() {
                     outerRadius="80%"
                     paddingAngle={2}
                     stroke="none"
+                    isAnimationActive
+                    animationDuration={350}
+                    animationEasing="ease-out"
                     onClick={(e: any) =>
                       e?.payload?.id && onSelectPortfolio(e.payload.id)
                     }

@@ -3,6 +3,8 @@ import { Cell, Pie, PieChart, ResponsiveContainer, Tooltip } from "recharts";
 import { assetTypeColor, assetTypeLabel } from "../../lib/colors";
 import { formatCurrency } from "../../lib/format";
 import { cn } from "../../lib/cn";
+import { effectiveType } from "../../lib/cashLike";
+import { useSettingsStore } from "../../stores/useSettingsStore";
 import type { AssetStats } from "../../lib/api";
 
 const PLATFORM_PALETTE = [
@@ -17,6 +19,9 @@ const PLATFORM_PALETTE = [
   "#FF8B7A",
 ];
 
+/** Asset modunda gösterilecek max dilim sayısı. Üstü "Diğer" altında toplanır. */
+const ASSET_TOP_N = 15;
+
 export function AllocationPie({
   assets,
   displayCurrency,
@@ -25,10 +30,12 @@ export function AllocationPie({
 }: {
   assets: AssetStats[];
   displayCurrency: string;
-  mode?: "type" | "platform";
+  mode?: "type" | "platform" | "asset";
   /** Platform mode'da: dilim tıklanınca key ("—" = atanmamış) */
   onSliceClick?: (key: string) => void;
 }) {
+  const cashExtraSymbols = useSettingsStore((s) => s.cashExtraSymbols);
+  const commodityExtraSymbols = useSettingsStore((s) => s.commodityExtraSymbols);
   const data = useMemo(() => {
     if (mode === "platform") {
       const totals = new Map<string, number>();
@@ -47,14 +54,52 @@ export function AllocationPie({
           fill: PLATFORM_PALETTE[i % PLATFORM_PALETTE.length],
         }));
     }
-    // Tip bazlı (default)
+    if (mode === "asset") {
+      // Sembol bazında topla — aynı asset farklı portföylerden geliyorsa birleştir.
+      const totals = new Map<string, { value: number; label: string }>();
+      for (const a of assets) {
+        if (!a.market_value_display) continue;
+        const key = `${a.symbol}|${a.asset_type}`;
+        const cur = totals.get(key);
+        const label = a.symbol;
+        if (cur) {
+          cur.value += a.market_value_display;
+        } else {
+          totals.set(key, { value: a.market_value_display, label });
+        }
+      }
+      const sorted = Array.from(totals.entries())
+        .map(([key, { value, label }]) => ({ key, value, label }))
+        .filter((d) => d.value > 0)
+        .sort((a, b) => b.value - a.value);
+
+      if (sorted.length <= ASSET_TOP_N) {
+        return sorted.map((d, i) => ({
+          ...d,
+          fill: PLATFORM_PALETTE[i % PLATFORM_PALETTE.length],
+        }));
+      }
+      const top = sorted.slice(0, ASSET_TOP_N);
+      const others = sorted.slice(ASSET_TOP_N);
+      const otherValue = others.reduce((s, x) => s + x.value, 0);
+      const out = top.map((d, i) => ({
+        ...d,
+        fill: PLATFORM_PALETTE[i % PLATFORM_PALETTE.length],
+      }));
+      out.push({
+        key: "__other__",
+        value: otherValue,
+        label: `Diğer (${others.length})`,
+        fill: "#6B6B75",
+      });
+      return out;
+    }
+    // Tip bazlı (default) — cash-like ve commodity-like asset'ler ayrı dilime düşer
     const totals = new Map<string, number>();
     for (const a of assets) {
       if (!a.market_value_display) continue;
-      totals.set(
-        a.asset_type,
-        (totals.get(a.asset_type) ?? 0) + a.market_value_display
-      );
+      const t = effectiveType(a, cashExtraSymbols, commodityExtraSymbols);
+      totals.set(t, (totals.get(t) ?? 0) + a.market_value_display);
     }
     return Array.from(totals.entries())
       .filter(([, v]) => v > 0)
@@ -64,7 +109,7 @@ export function AllocationPie({
         label: assetTypeLabel(type),
         fill: assetTypeColor(type),
       }));
-  }, [assets, mode]);
+  }, [assets, mode, cashExtraSymbols, commodityExtraSymbols]);
 
   if (data.length === 0) {
     return (
@@ -91,6 +136,9 @@ export function AllocationPie({
             outerRadius="80%"
             paddingAngle={2}
             stroke="none"
+            isAnimationActive
+            animationDuration={350}
+            animationEasing="ease-out"
             onClick={(e: any) => {
               if (onSliceClick && e?.payload?.key) onSliceClick(e.payload.key);
             }}

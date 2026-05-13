@@ -4,8 +4,9 @@ use serde::{Deserialize, Serialize};
 use sqlx::SqlitePool;
 use tauri::{AppHandle, State};
 
+use crate::commands::investment::InvestmentEntry;
 use crate::db::models::{
-    Asset, Budget, BudgetEntry, Goal, PriceAlert, PriceCache, Portfolio, Profile, Setting,
+    Asset, Budget, BudgetLine, Goal, PriceAlert, PriceCache, Portfolio, Profile, Setting,
     Transaction,
 };
 use crate::error::{AppError, AppResult};
@@ -27,8 +28,12 @@ pub struct ExportPayload {
     pub settings: Vec<Setting>,
     #[serde(default)]
     pub budgets: Vec<Budget>,
+    /// Bütçe planlama line item'ları (013'ten itibaren). Eski yedeklerde yok.
     #[serde(default)]
-    pub budget_entries: Vec<BudgetEntry>,
+    pub budget_lines: Vec<BudgetLine>,
+    /// Aylık yatırım kayıtları (profile başına). Eski yedeklerde yok → #[serde(default)].
+    #[serde(default)]
+    pub investment_entries: Vec<InvestmentEntry>,
 }
 
 #[derive(Debug, Serialize, Deserialize, sqlx::FromRow, Clone)]
@@ -63,9 +68,10 @@ pub async fn build_export_payload(pool: &SqlitePool) -> AppResult<ExportPayload>
     )
     .fetch_all(pool)
     .await?;
-    let budget_entries: Vec<BudgetEntry> = sqlx::query_as(
-        "SELECT budget_id, year_month, income, expense, note, recorded_at, currency, fx_to_usd
-         FROM budget_entries",
+    let budget_lines: Vec<BudgetLine> = sqlx::query_as(
+        "SELECT id, budget_id, kind, label, amount, currency, start_ym, end_ym,
+                fx_to_usd, note, created_at
+         FROM budget_lines",
     )
     .fetch_all(pool)
     .await?;
@@ -104,6 +110,12 @@ pub async fn build_export_payload(pool: &SqlitePool) -> AppResult<ExportPayload>
     let settings: Vec<Setting> = sqlx::query_as("SELECT key, value FROM settings")
         .fetch_all(pool)
         .await?;
+    let investment_entries: Vec<InvestmentEntry> = sqlx::query_as(
+        "SELECT profile_id, year_month, currency, amount, fx_to_usd, note, recorded_at
+         FROM investment_entries",
+    )
+    .fetch_all(pool)
+    .await?;
 
     Ok(ExportPayload {
         schema_version,
@@ -118,7 +130,8 @@ pub async fn build_export_payload(pool: &SqlitePool) -> AppResult<ExportPayload>
         goals,
         settings,
         budgets,
-        budget_entries,
+        budget_lines,
+        investment_entries,
     })
 }
 
@@ -172,13 +185,15 @@ pub struct ImportResult {
     pub alerts_added: usize,
     pub goals_added: usize,
     pub budgets_added: usize,
+    pub investment_entries_added: usize,
 }
 
 async fn do_replace(pool: &SqlitePool, p: ExportPayload) -> AppResult<ImportResult> {
     let mut tx = pool.begin().await?;
 
     // CASCADE'le tüm bağımlılıklar düşer
-    sqlx::query("DELETE FROM budget_entries").execute(&mut *tx).await?;
+    sqlx::query("DELETE FROM budget_lines").execute(&mut *tx).await?;
+    sqlx::query("DELETE FROM budget_month_overrides").execute(&mut *tx).await?;
     sqlx::query("DELETE FROM budgets").execute(&mut *tx).await?;
     sqlx::query("DELETE FROM goals").execute(&mut *tx).await?;
     sqlx::query("DELETE FROM price_alerts").execute(&mut *tx).await?;
@@ -187,6 +202,7 @@ async fn do_replace(pool: &SqlitePool, p: ExportPayload) -> AppResult<ImportResu
     sqlx::query("DELETE FROM transactions").execute(&mut *tx).await?;
     sqlx::query("DELETE FROM assets").execute(&mut *tx).await?;
     sqlx::query("DELETE FROM portfolios").execute(&mut *tx).await?;
+    sqlx::query("DELETE FROM investment_entries").execute(&mut *tx).await?;
     sqlx::query("DELETE FROM profiles").execute(&mut *tx).await?;
     // sqlite_sequence sıfırla (id'ler 1'den başlasın import'la uyumlu)
     let _ = sqlx::query("DELETE FROM sqlite_sequence").execute(&mut *tx).await;
@@ -241,19 +257,23 @@ async fn do_replace(pool: &SqlitePool, p: ExportPayload) -> AppResult<ImportResu
         .execute(&mut *tx)
         .await?;
     }
-    for e in &p.budget_entries {
+    for l in &p.budget_lines {
         sqlx::query(
-            "INSERT INTO budget_entries (budget_id, year_month, income, expense, note, recorded_at, currency, fx_to_usd)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+            "INSERT INTO budget_lines (id, budget_id, kind, label, amount, currency,
+                                       start_ym, end_ym, fx_to_usd, note, created_at)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
         )
-        .bind(e.budget_id)
-        .bind(&e.year_month)
-        .bind(e.income)
-        .bind(e.expense)
-        .bind(&e.note)
-        .bind(e.recorded_at)
-        .bind(&e.currency)
-        .bind(e.fx_to_usd)
+        .bind(l.id)
+        .bind(l.budget_id)
+        .bind(&l.kind)
+        .bind(&l.label)
+        .bind(l.amount)
+        .bind(&l.currency)
+        .bind(&l.start_ym)
+        .bind(&l.end_ym)
+        .bind(l.fx_to_usd)
+        .bind(&l.note)
+        .bind(l.created_at)
         .execute(&mut *tx)
         .await?;
     }
@@ -357,6 +377,23 @@ async fn do_replace(pool: &SqlitePool, p: ExportPayload) -> AppResult<ImportResu
         .await?;
     }
 
+    for ie in &p.investment_entries {
+        sqlx::query(
+            "INSERT INTO investment_entries
+                (profile_id, year_month, currency, amount, fx_to_usd, note, recorded_at)
+             VALUES (?, ?, ?, ?, ?, ?, ?)",
+        )
+        .bind(ie.profile_id)
+        .bind(&ie.year_month)
+        .bind(&ie.currency)
+        .bind(ie.amount)
+        .bind(ie.fx_to_usd)
+        .bind(&ie.note)
+        .bind(ie.recorded_at)
+        .execute(&mut *tx)
+        .await?;
+    }
+
     tx.commit().await?;
 
     Ok(ImportResult {
@@ -367,6 +404,7 @@ async fn do_replace(pool: &SqlitePool, p: ExportPayload) -> AppResult<ImportResu
         alerts_added: p.price_alerts.len(),
         goals_added: p.goals.len(),
         budgets_added: p.budgets.len(),
+        investment_entries_added: p.investment_entries.len(),
     })
 }
 
@@ -565,6 +603,39 @@ async fn do_merge(pool: &SqlitePool, p: ExportPayload) -> AppResult<ImportResult
         }
     }
 
+    // Investment entries — (profile_id, year_month, currency) PK üzerinden upsert
+    // mantığıyla: aynı tuple varsa atla (kullanıcının mevcut kaydını ezme),
+    // yoksa ekle.
+    let mut investment_entries_added = 0;
+    for ie in &p.investment_entries {
+        let existing: Option<(i64,)> = sqlx::query_as(
+            "SELECT 1 FROM investment_entries
+             WHERE profile_id = ? AND year_month = ? AND currency = ?",
+        )
+        .bind(ie.profile_id)
+        .bind(&ie.year_month)
+        .bind(&ie.currency)
+        .fetch_optional(&mut *tx)
+        .await?;
+        if existing.is_none() {
+            sqlx::query(
+                "INSERT INTO investment_entries
+                    (profile_id, year_month, currency, amount, fx_to_usd, note, recorded_at)
+                 VALUES (?, ?, ?, ?, ?, ?, ?)",
+            )
+            .bind(ie.profile_id)
+            .bind(&ie.year_month)
+            .bind(&ie.currency)
+            .bind(ie.amount)
+            .bind(ie.fx_to_usd)
+            .bind(&ie.note)
+            .bind(ie.recorded_at)
+            .execute(&mut *tx)
+            .await?;
+            investment_entries_added += 1;
+        }
+    }
+
     tx.commit().await?;
 
     Ok(ImportResult {
@@ -575,5 +646,6 @@ async fn do_merge(pool: &SqlitePool, p: ExportPayload) -> AppResult<ImportResult
         alerts_added,
         goals_added,
         budgets_added: 0, // merge için budget desteği şimdilik replace mode'da
+        investment_entries_added,
     })
 }

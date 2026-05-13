@@ -427,6 +427,9 @@ export function PassiveIncome() {
                     outerRadius="80%"
                     paddingAngle={2}
                     stroke="none"
+                    isAnimationActive
+                    animationDuration={350}
+                    animationEasing="ease-out"
                   >
                     {breakdownData.map((d) => (
                       <Cell key={d.source} fill={d.fill} />
@@ -547,10 +550,10 @@ function Empty() {
       <div>
         <div className="mx-auto mb-3 h-20 w-20 rounded-full border-2 border-dashed border-(--color-border-subtle)" />
         <p className="text-sm text-(--color-text-secondary)">
-          Henüz pasif gelir kaydı yok.
+          Henüz gerçekleşen pasif gelir kaydı yok.
         </p>
         <p className="mt-0.5 text-xs text-(--color-text-tertiary)">
-          Asset detayında "Pasif Gelir" tipiyle işlem ekle.
+          Üstteki tabloda yıllık % gir — beklenen getiri otomatik hesaplanır.
         </p>
       </div>
     </div>

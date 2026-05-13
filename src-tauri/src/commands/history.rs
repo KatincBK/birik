@@ -35,42 +35,45 @@ fn ttl_seconds(range: &str) -> i64 {
     }
 }
 
-/// Range → Binance (interval, limit)
+/// Range → Binance (interval, limit). Limit chart range'inden %20-50 fazla
+/// veri çekiyor — edge'lerde data eksiği olmasın diye.
 fn binance_params(range: &str) -> (&'static str, usize) {
     match range {
-        "1d" => ("5m", 288),
-        "1w" => ("1h", 168),
-        "1m" => ("4h", 180),
-        "3m" => ("1d", 90),
-        "1y" => ("1d", 365),
+        "1d" => ("5m", 320),  // 26.7 saat
+        "1w" => ("1h", 240),  // 10 gün
+        "1m" => ("4h", 240),  // 40 gün
+        "3m" => ("1d", 120),  // 4 ay
+        "1y" => ("1d", 450),  // ~15 ay
         "max" => ("1w", 1000),
-        _ => ("1d", 90),
+        _ => ("1d", 120),
     }
 }
 
-/// Range → Yahoo (range, interval)
+/// Range → Yahoo (range, interval). Yahoo range stringleri trading day bazlı —
+/// chart'ın asked range'inden fazla iste ki nearest_at_or_before lookup'larında
+/// eksik kalmasın (özellikle hisse weekend/tatil günlerinde).
 fn yahoo_params(range: &str) -> (&'static str, &'static str) {
     match range {
-        "1d" => ("1d", "5m"),
-        "1w" => ("5d", "1h"),
-        "1m" => ("1mo", "1d"),
-        "3m" => ("3mo", "1d"),
-        "1y" => ("1y", "1d"),
+        "1d" => ("2d", "5m"),
+        "1w" => ("1mo", "1h"),
+        "1m" => ("3mo", "1d"),
+        "3m" => ("6mo", "1d"),
+        "1y" => ("2y", "1d"),
         "max" => ("max", "1wk"),
-        _ => ("3mo", "1d"),
+        _ => ("6mo", "1d"),
     }
 }
 
-/// Range → CoinGecko days
+/// Range → CoinGecko days. Buffer eklenmiş — fetch geriye 1.3x kadar uzanır.
 fn coingecko_days(range: &str) -> &'static str {
     match range {
-        "1d" => "1",
-        "1w" => "7",
-        "1m" => "30",
-        "3m" => "90",
-        "1y" => "365",
+        "1d" => "2",
+        "1w" => "14",
+        "1m" => "45",
+        "3m" => "120",
+        "1y" => "450",
         "max" => "max",
-        _ => "90",
+        _ => "120",
     }
 }
 
@@ -288,7 +291,7 @@ fn range_to_days(range: &str) -> i64 {
 }
 
 /// Asc sıralı `(ts, val)` listesinden `target_ts`'ye ≤ olan son noktanın value'su.
-/// Yoksa None (target tüm noktalardan eskiyse veya liste boşsa).
+/// Yoksa None (liste boşsa).
 fn nearest_at_or_before(points: &[(i64, f64)], target_ts: i64) -> Option<f64> {
     if points.is_empty() {
         return None;
@@ -302,6 +305,42 @@ fn nearest_at_or_before(points: &[(i64, f64)], target_ts: i64) -> Option<f64> {
         }
     }
     last
+}
+
+/// `nearest_at_or_before` ama fallback ile: target_ts tüm noktalardan eskiyse
+/// (yani lookup None dönerse), en eski mevcut noktayı kullan. Use case:
+/// - USDT gibi stablecoin'lerde binance_rest tek nokta (NOW) döner; tarihsel
+///   günlerde bu fallback ~1.0'ı projekte eder
+/// - Yeni eklenen asset'in fiyat history'si chart range'inden kısaysa, eski
+///   günler için ilk bilinen fiyatı kullan (best-effort, smooth chart)
+fn nearest_price_lenient(points: &[(i64, f64)], target_ts: i64) -> Option<f64> {
+    nearest_at_or_before(points, target_ts)
+        .or_else(|| points.first().map(|(_, v)| *v))
+}
+
+/// TCMB/Frankfurter bugünkü rates'ten "1 X = ? USD" hesabı. Historical FX
+/// series başarısız olduğunda yaklaşık fallback olarak kullanılır.
+fn today_fx_to_usd(
+    currency: &str,
+    current_fx: &crate::services::tcmb::FxRates,
+) -> Option<f64> {
+    let upper = currency.to_uppercase();
+    if upper == "USD" {
+        return Some(1.0);
+    }
+    // current_fx.rates[X] = 1 X için TRY karşılığı. 1 USD = rates["USD"] TRY.
+    let usd_try = current_fx.rates.get("USD").copied()?;
+    if usd_try <= 0.0 {
+        return None;
+    }
+    if upper == "TRY" {
+        return Some(1.0 / usd_try);
+    }
+    let ccy_try = current_fx.rates.get(&upper).copied()?;
+    if ccy_try <= 0.0 {
+        return None;
+    }
+    Some(ccy_try / usd_try)
 }
 
 #[tauri::command]
@@ -403,15 +442,17 @@ pub async fn fetch_portfolio_history(
     struct AssetRow {
         id: i64,
         currency: String,
+        #[sqlx(rename = "type")]
+        asset_type: String,
     }
     let assets: Vec<AssetRow> = match portfolio_id {
         Some(pid) => sqlx::query_as(
-            "SELECT id, currency FROM assets WHERE portfolio_id = ?",
+            "SELECT id, currency, type FROM assets WHERE portfolio_id = ?",
         )
         .bind(pid)
         .fetch_all(&db.pool)
         .await?,
-        None => sqlx::query_as("SELECT id, currency FROM assets")
+        None => sqlx::query_as("SELECT id, currency, type FROM assets")
             .fetch_all(&db.pool)
             .await?,
     };
@@ -445,92 +486,176 @@ pub async fn fetch_portfolio_history(
         // (timestamp_ms, price_in_asset_currency) — asc sıralı
         prices: Vec<(i64, f64)>,
     }
-    let mut asset_calcs: Vec<AssetCalc> = Vec::with_capacity(assets.len());
 
-    for a in &assets {
-        // Bugünkü bakiye
-        let txns: Vec<crate::db::models::Transaction> = sqlx::query_as(
-            "SELECT id, asset_id, date, type, source, quantity, price, fee, note,
-                    is_deleted, created_at, fx_to_usd, platform, expected_yield_pct
-             FROM transactions WHERE asset_id = ? AND is_deleted = 0",
-        )
-        .bind(a.id)
-        .fetch_all(&db.pool)
-        .await?;
-        let pos = crate::commands::calc::position_from_transactions(&txns);
-        if pos.balance.abs() < 1e-9 {
-            continue;
-        }
-
-        // Asset price history (range için cache + fetch)
-        let prices = match fetch_asset_history_inner(&db.pool, a.id, &range).await {
-            Ok((p, _, _, _)) => p,
-            Err(e) => {
-                log::warn!(
-                    "[birik] portfolio history: asset {} price fetch fail: {e}",
-                    a.id
-                );
-                continue;
+    // Asset history fetch + position hesabı paralel. History boş asset'ler
+    // (USDT single-point, USD-fx Frankfurter boş, Yahoo fail) cache'ten
+    // single-point fallback alır — her tarihsel günde lenient lookup ile
+    // sabit projekte edilir. Bu sayede today live calc'la apples-to-apples.
+    let range_str = range.clone();
+    let pool_clone = db.pool.clone();
+    let asset_futures = assets.iter().map(|a| {
+        let pool = pool_clone.clone();
+        let range = range_str.clone();
+        let asset_id = a.id;
+        let asset_currency = a.currency.to_uppercase();
+        let asset_type = a.asset_type.clone();
+        async move {
+            let txns: Vec<crate::db::models::Transaction> = sqlx::query_as(
+                "SELECT id, asset_id, date, type, source, quantity, price, fee, note,
+                        is_deleted, created_at, fx_to_usd, platform, expected_yield_pct
+                 FROM transactions WHERE asset_id = ? AND is_deleted = 0",
+            )
+            .bind(asset_id)
+            .fetch_all(&pool)
+            .await
+            .ok()?;
+            let pos = crate::commands::calc::position_from_transactions(&txns);
+            if pos.balance.abs() < 1e-9 {
+                return None;
             }
-        };
-        if prices.is_empty() {
-            continue;
+
+            // 1) Historical fetch dene
+            let mut prices = match fetch_asset_history_inner(&pool, asset_id, &range).await {
+                Ok((p, _, _, _)) => p,
+                Err(e) => {
+                    log::warn!(
+                        "[birik] portfolio history: asset {asset_id} price fetch fail: {e}"
+                    );
+                    vec![]
+                }
+            };
+
+            // 2) History boşsa cache'ten single-point yap (lenient lookup geri
+            //    projekte edecek). Cache currency price_currency olabilir
+            //    (asset.currency'den farklı, örn fx asset USD cache=TRY).
+            //    Bu durumda price'ı asset.currency'e convert et — strict-resolve
+            //    sonra balance × price × fx_to_usd yapacak ve uyumlu olacak.
+            let mut effective_currency = asset_currency.clone();
+            if prices.is_empty() {
+                if let Ok(Some(cached)) = crate::services::cache::get(&pool, asset_id).await
+                {
+                    let now_ms = chrono::Utc::now().timestamp_millis();
+                    prices = vec![(now_ms, cached.price)];
+                    // Cache currency'ye geçiş — fx_series bu currency için
+                    // lookup yapacak. Örn USD fx asset için cache=TRY ise
+                    // effective_currency=TRY, fx_series TRY için fetch edilir.
+                    effective_currency = cached.currency.to_uppercase();
+                    log::info!(
+                        "[birik] portfolio history: asset {asset_id} ({asset_type}) using cache fallback ({effective_currency})"
+                    );
+                }
+            }
+
+            if prices.is_empty() {
+                return None;
+            }
+
+            Some(AssetCalc {
+                balance: pos.balance,
+                currency: effective_currency,
+                prices,
+            })
         }
+    });
+    let asset_calcs: Vec<AssetCalc> = futures_util::future::join_all(asset_futures)
+        .await
+        .into_iter()
+        .flatten()
+        .collect();
 
-        asset_calcs.push(AssetCalc {
-            balance: pos.balance,
-            currency: a.currency.to_uppercase(),
-            prices,
-        });
-    }
-
-    // 3) Currency'lerin günlük FX_to_USD serileri (asset.currency != USD ise)
-    let mut fx_series: HashMap<String, Vec<(i64, f64)>> = HashMap::new();
+    // 3) Currency'lerin günlük FX_to_USD serileri — paralel fetch
     let from_iso = start.format("%Y-%m-%d").to_string();
     let to_iso = now.format("%Y-%m-%d").to_string();
-    for ac in &asset_calcs {
-        if ac.currency == "USD" || fx_series.contains_key(&ac.currency) {
-            continue;
+    let distinct_currencies: std::collections::HashSet<String> = asset_calcs
+        .iter()
+        .filter(|ac| ac.currency != "USD")
+        .map(|ac| ac.currency.clone())
+        .collect();
+    let fx_futures = distinct_currencies.iter().map(|c| {
+        let from_iso = from_iso.clone();
+        let to_iso = to_iso.clone();
+        let currency = c.clone();
+        async move {
+            let result = crate::services::frankfurter::fetch_range_to_usd(
+                &from_iso,
+                &to_iso,
+                &currency,
+            )
+            .await;
+            let series = match result {
+                Ok(v) if !v.is_empty() => v,
+                _ => {
+                    log::warn!(
+                        "[birik] portfolio history: fx range fetch fail for {currency}"
+                    );
+                    vec![]
+                }
+            };
+            (currency, series)
         }
-        match crate::services::frankfurter::fetch_range_to_usd(
-            &from_iso,
-            &to_iso,
-            &ac.currency,
-        )
-        .await
-        {
-            Ok(v) if !v.is_empty() => {
-                fx_series.insert(ac.currency.clone(), v);
-            }
-            _ => {
-                log::warn!(
-                    "[birik] portfolio history: fx range fetch fail for {}",
-                    ac.currency
-                );
-                fx_series.insert(ac.currency.clone(), vec![]);
-            }
-        }
+    });
+    let fx_results = futures_util::future::join_all(fx_futures).await;
+    let mut fx_series: HashMap<String, Vec<(i64, f64)>> = HashMap::new();
+    for (c, v) in fx_results {
+        fx_series.insert(c, v);
     }
 
-    // USD → display dönüşümü için bugünkü FX (hypothetical sonucu USD'de hesaplanıyor)
-    let current_fx = if display != "USD" {
-        let mut rates = crate::services::fx::fetch_rates().await?;
-        crate::commands::calc::enrich_with_crypto(&mut rates, &display, &db.pool).await;
-        Some(rates)
+    // Bugünkü FX rates — iki amaçla kullanılır:
+    //   a) USD → display dönüşümü (hypothetical sonucu USD bazlı)
+    //   b) Historical FX serisi başarısız olursa fallback (today's rate)
+    // Asset_calcs içinde non-USD currency varsa veya display != USD ise fetch et.
+    let any_non_usd = asset_calcs.iter().any(|ac| ac.currency != "USD");
+    let need_current_fx = display != "USD" || any_non_usd;
+    let current_fx = if need_current_fx {
+        match crate::services::fx::fetch_rates().await {
+            Ok(mut rates) => {
+                if display != "USD" {
+                    crate::commands::calc::enrich_with_crypto(&mut rates, &display, &db.pool).await;
+                }
+                Some(rates)
+            }
+            Err(e) => {
+                log::warn!("[birik] portfolio history: current fx fetch fail: {e}");
+                None
+            }
+        }
     } else {
         None
     };
 
     // 4) Range içindeki her gün (start..=today) için nokta üret
+    //
+    // Strict resolve: hypothetical hesabında bir asset'in fiyat veya FX
+    // history'si o günü kapsamıyorsa o günü tamamen skip et. Eskiden permissive
+    // idi (eksik asset = 0); ilk gün artifact'i (örn. 426 USD = sadece 1
+    // asset resolve etmiş diğerleri 0 sayılmış) bu yüzdendi.
+    //
+    // Today istisnası: bugünün point'i historical price feed'inden değil,
+    // canlı `calculate_portfolio_inner` ile hesaplanır — dashboard'da görünen
+    // değerle birebir uyumlu olsun. Snapshot da skip edilir (sabahki stale
+    // değer kullanılmasın).
     let mut points: Vec<PortfolioHistoryPoint> = Vec::with_capacity(days as usize + 1);
     let mut samples: i64 = 0;
     let today_naive = now.date_naive();
     let start_naive = start.date_naive();
 
     let mut day = start_naive;
-    while day <= today_naive {
+    while day < today_naive {
         let day_str = day.format("%Y-%m-%d").to_string();
+        // Lookup timestamp: gün sonu (ertesi gün 00:00 UTC). Binance daily
+        // candle'ı (open=00:00) bu sayede o günün close'unu döner. Yahoo
+        // daily candle'ı (timestamp=market open ~13:30 UTC) da o günün
+        // close'una eşleşir. Eskiden 12:00 UTC sorulduğunda Yahoo dünün
+        // candle'ını döndürüyordu → 1 gün eski fiyat artifact'i.
         let day_ms = day
+            .succ_opt()
+            .and_then(|d| d.and_hms_opt(0, 0, 0))
+            .map(|d| d.and_utc().timestamp_millis())
+            .unwrap_or(0);
+        // Display timestamp gün ortası — chart X ekseni günün etiketini
+        // doğru göstersin (ertesi gün 00:00 ms görsel olarak ertesi gün
+        // gibi okunmasın).
+        let display_ms = day
             .and_hms_opt(12, 0, 0)
             .map(|d| d.and_utc().timestamp_millis())
             .unwrap_or(0);
@@ -546,33 +671,45 @@ pub async fn fetch_portfolio_history(
 
         if let Some(v) = snapshot_value {
             points.push(PortfolioHistoryPoint {
-                ts: day_ms,
+                ts: display_ms,
                 value: v,
                 is_hypothetical: false,
             });
             samples += 1;
         } else if !asset_calcs.is_empty() {
-            // Hypothetical: bugünkü bakiyeler × o günkü fiyat × o günkü fx_to_usd.
-            // Kısmi resolve permissive — bir asset'in price/fx history'si o kadar
-            // geriye gitmiyorsa o asset'i 0 say, diğerleri için hesabı sürdür.
-            // Aksi takdirde tek bir asset'in eksik tarihinden bütün grafik boş kalır.
+            // Strict resolve: tüm asset'lerin o gün için price + fx verisi
+            // OLMALI. Aksi takdirde grafiğin o günü skip edilir (alttan kopuk
+            // olmasındansa, kullanıcıya açıkça eksik göstermek doğru).
             let mut total_usd = 0.0;
-            let mut any_resolved = false;
+            let mut all_resolved = true;
             for ac in &asset_calcs {
-                let price = nearest_at_or_before(&ac.prices, day_ms);
+                // Lenient lookup: önce ≤ target, yoksa ilk mevcut noktayı projekte et.
+                // Bu olmadan stablecoin (USDT) veya yeni eklenmiş asset bütün tarihsel
+                // günleri killer (single-point veya kısa history nedeniyle).
+                let price = nearest_price_lenient(&ac.prices, day_ms);
                 let fx_to_usd = if ac.currency == "USD" {
                     Some(1.0)
                 } else {
                     fx_series
                         .get(&ac.currency)
-                        .and_then(|s| nearest_at_or_before(s, day_ms))
+                        .and_then(|s| nearest_price_lenient(s, day_ms))
+                        .or_else(|| {
+                            current_fx
+                                .as_ref()
+                                .and_then(|fx| today_fx_to_usd(&ac.currency, fx))
+                        })
                 };
-                if let (Some(p), Some(fx)) = (price, fx_to_usd) {
-                    total_usd += ac.balance * p * fx;
-                    any_resolved = true;
+                match (price, fx_to_usd) {
+                    (Some(p), Some(fx)) => {
+                        total_usd += ac.balance * p * fx;
+                    }
+                    _ => {
+                        all_resolved = false;
+                        break;
+                    }
                 }
             }
-            if any_resolved {
+            if all_resolved {
                 let value_in_display = match &current_fx {
                     Some(fx) => crate::commands::calc::convert(
                         total_usd,
@@ -583,15 +720,79 @@ pub async fn fetch_portfolio_history(
                     None => total_usd,
                 };
                 points.push(PortfolioHistoryPoint {
-                    ts: day_ms,
+                    ts: display_ms,
                     value: value_in_display,
                     is_hypothetical: true,
                 });
             }
         }
-        day = day.succ_opt().unwrap_or(today_naive);
-        if day > today_naive {
-            break;
+        day = match day.succ_opt() {
+            Some(d) => d,
+            None => break,
+        };
+    }
+
+    // Today: tarihsel günlerle BİREBİR aynı hesap motorunu kullan
+    // (asset_calcs + nearest_price_lenient). Lookup timestamp gelecekte —
+    // her asset'in en son fiyatı dönecek. Bu sayede dashboard ile küçük
+    // bir farkı tolere ediyoruz (1d Binance candle'ı vs canlı cache),
+    // ama tarihsel günlerle pürüzsüz devamlılık sağlıyoruz.
+    let today_display_ms = today_naive
+        .and_hms_opt(12, 0, 0)
+        .map(|d| d.and_utc().timestamp_millis())
+        .unwrap_or(0);
+    // Lookup için yarın 00:00 UTC — en son mevcut fiyatı yakalar
+    let today_lookup_ms = today_naive
+        .succ_opt()
+        .and_then(|d| d.and_hms_opt(0, 0, 0))
+        .map(|d| d.and_utc().timestamp_millis())
+        .unwrap_or(0);
+
+    if !asset_calcs.is_empty() {
+        let mut total_usd = 0.0;
+        let mut all_resolved = true;
+        for ac in &asset_calcs {
+            let price = nearest_price_lenient(&ac.prices, today_lookup_ms);
+            let fx_to_usd = if ac.currency == "USD" {
+                Some(1.0)
+            } else {
+                fx_series
+                    .get(&ac.currency)
+                    .and_then(|s| nearest_price_lenient(s, today_lookup_ms))
+                    .or_else(|| {
+                        current_fx
+                            .as_ref()
+                            .and_then(|fx| today_fx_to_usd(&ac.currency, fx))
+                    })
+            };
+            match (price, fx_to_usd) {
+                (Some(p), Some(fx)) => total_usd += ac.balance * p * fx,
+                _ => {
+                    all_resolved = false;
+                    break;
+                }
+            }
+        }
+        if all_resolved {
+            let value_in_display = match &current_fx {
+                Some(fx) => crate::commands::calc::convert(
+                    total_usd,
+                    "USD",
+                    &display,
+                    Some(fx),
+                ),
+                None => total_usd,
+            };
+            points.push(PortfolioHistoryPoint {
+                ts: today_display_ms,
+                value: value_in_display,
+                // Tarihsel günlerle aynı motoru kullanıyor (asset_calcs + lenient
+                // lookup). Hepsini aynı seri olarak çiz — frontend "real" vs
+                // "hypothetical" çizgileri arasında tek-noktalı kopukluk
+                // yaratmasın.
+                is_hypothetical: true,
+            });
+            samples += 1;
         }
     }
 

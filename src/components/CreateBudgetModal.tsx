@@ -40,13 +40,6 @@ export function CreateBudgetModal({ existing }: { existing?: Budget } = {}) {
   const defaultCurrency = useSettingsStore((s) => s.displayCurrency);
 
   const [name, setName] = useState(existing?.name ?? "");
-  const [income, setIncome] = useState(
-    existing ? existing.monthly_income.toString() : ""
-  );
-  const [expense, setExpense] = useState(
-    existing ? existing.monthly_expense.toString() : ""
-  );
-  const [currency, setCurrency] = useState(existing?.currency ?? defaultCurrency);
   const [target, setTarget] = useState(
     existing?.target_value != null ? existing.target_value.toString() : ""
   );
@@ -65,13 +58,6 @@ export function CreateBudgetModal({ existing }: { existing?: Budget } = {}) {
       toast.error("Bütçe adı boş olamaz");
       return;
     }
-    const inc = parseDecimal(income);
-    const exp = parseDecimal(expense);
-    if (inc < 0 || exp < 0) {
-      playSound("error");
-      toast.error("Gelir ve gider negatif olamaz");
-      return;
-    }
     const tgt = target.trim() === "" ? null : parseDecimal(target);
     if (tgt != null && tgt <= 0) {
       playSound("error");
@@ -86,11 +72,14 @@ export function CreateBudgetModal({ existing }: { existing?: Budget } = {}) {
     }
     setSubmitting(true);
     try {
+      // monthly_income/expense artık kullanılmıyor (line items'tan derive
+      // ediliyor) — 0 olarak yaz, backwards compat için.
       const args = {
         name: trimmed,
-        monthlyIncome: inc,
-        monthlyExpense: exp,
-        currency: currency.toUpperCase(),
+        monthlyIncome: 0,
+        monthlyExpense: 0,
+        currency:
+          (existing?.currency ?? defaultCurrency).toString().toUpperCase(),
         targetValue: tgt,
         targetDate: dateInputToUnix(targetDate),
         targetCurrency: tgt != null ? targetCurrency.toUpperCase() : null,
@@ -122,8 +111,8 @@ export function CreateBudgetModal({ existing }: { existing?: Budget } = {}) {
       title={existing ? "Bütçeyi düzenle" : "Yeni bütçe"}
       description={
         existing
-          ? "Aylık gelir/giderini ve hedefini güncelle."
-          : "Örn: Genel, Ev, Tatil, Emeklilik fonu…"
+          ? "Bütçe ismini ve hedefini güncelle. Aylık gelir/gider satırları sayfada eklenir."
+          : "Örn: Genel, Ev, Tatil, Emeklilik fonu… Aylık gelir ve gider satırlarını sayfadan ekleyebilirsin."
       }
     >
       <Field label="İsim">
@@ -135,43 +124,6 @@ export function CreateBudgetModal({ existing }: { existing?: Budget } = {}) {
           placeholder="Bütçe adı"
         />
       </Field>
-
-      <div className="mt-4 grid grid-cols-2 gap-3">
-        <Field label="Aylık gelir">
-          <input
-            inputMode="decimal"
-            value={income}
-            onChange={(e) => setIncome(e.target.value)}
-            placeholder="0"
-            className={inputClass}
-          />
-        </Field>
-        <Field label="Aylık gider">
-          <input
-            inputMode="decimal"
-            value={expense}
-            onChange={(e) => setExpense(e.target.value)}
-            placeholder="0"
-            className={inputClass}
-          />
-        </Field>
-      </div>
-
-      <div className="mt-3">
-        <Field label="Varsayılan entry para birimi">
-          <select
-            value={currency}
-            onChange={(e) => setCurrency(e.target.value)}
-            className={inputClass}
-          >
-            {["USD", "TRY", "EUR", "GBP"].map((c) => (
-              <option key={c} value={c}>
-                {c}
-              </option>
-            ))}
-          </select>
-        </Field>
-      </div>
 
       <div className="mt-5 border-t border-(--color-border-subtle) pt-4">
         <p className="mb-3 text-[11px] font-medium tracking-[0.05em] text-(--color-text-secondary) uppercase">

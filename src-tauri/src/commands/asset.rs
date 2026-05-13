@@ -16,10 +16,9 @@ pub async fn ensure_asset_columns(pool: &sqlx::SqlitePool) -> AppResult<()> {
         ("platform", "TEXT"),
     ];
     for (col, def) in required {
-        let check_sql = format!(
-            "SELECT 1 FROM pragma_table_info('assets') WHERE name = ?1 LIMIT 1"
-        );
-        let exists: Option<i64> = sqlx::query_scalar(&check_sql)
+        let check_sql =
+            "SELECT 1 FROM pragma_table_info('assets') WHERE name = ?1 LIMIT 1";
+        let exists: Option<i64> = sqlx::query_scalar(check_sql)
             .bind(col)
             .fetch_optional(pool)
             .await?;
@@ -237,7 +236,7 @@ pub async fn update_asset_yield(
     expected_yield_pct: Option<f64>,
 ) -> AppResult<()> {
     if let Some(v) = expected_yield_pct {
-        if !v.is_finite() || v < 0.0 || v > 1000.0 {
+        if !v.is_finite() || !(0.0..=1000.0).contains(&v) {
             return Err(AppError::validation("Beklenen yield 0-1000% arasında olmalı"));
         }
     }

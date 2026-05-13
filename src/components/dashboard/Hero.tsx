@@ -9,11 +9,16 @@ export function Hero({
   loading,
   label = "Toplam değer",
   size = "md",
+  /** Henüz değer hesabı bitmemişse true: ufak "güncelleniyor" pulse'u
+   *  gösterir, ana değer mevcut/eski haliyle (totalValue=0 ise dash) görünür.
+   *  Default false. */
+  staleHint = false,
 }: {
   totalValue: number;
   loading: boolean;
   label?: string;
   size?: "md" | "lg";
+  staleHint?: boolean;
 }) {
   const displayCurrency = useSettingsStore((s) => s.displayCurrency);
   const cycle = useSettingsStore((s) => s.cycleCurrency);
@@ -35,7 +40,6 @@ export function Hero({
         className="group inline-flex items-baseline gap-2 self-start rounded-lg px-1 py-0.5 text-left transition-colors duration-150 hover:bg-(--color-bg-hover)"
         style={{ perspective: "600px" }}
       >
-        {/* Currency flip — PLAN §6.1.D: Y ekseninde 90° dönüş, 200+200ms */}
         <AnimatePresence mode="wait" initial={false}>
           <motion.span
             key={displayCurrency}
@@ -46,17 +50,32 @@ export function Hero({
             className={[
               "inline-flex items-baseline gap-2 font-semibold tracking-tight tabular",
               size === "lg" ? "text-7xl" : "text-5xl",
-              loading ? "opacity-60" : "",
+              loading ? "opacity-85" : "",
             ].join(" ")}
             style={{ transformStyle: "preserve-3d", backfaceVisibility: "hidden" }}
           >
             {formatCurrency(animatedValue, displayCurrency, "summary")}
-            <span className="text-sm font-medium text-(--color-text-tertiary) group-hover:text-(--color-text-secondary)">
-              {displayCurrency}
+            <span className="inline-flex items-baseline gap-1.5">
+              <span className="text-sm font-medium text-(--color-text-tertiary) group-hover:text-(--color-text-secondary)">
+                {displayCurrency}
+              </span>
+              {staleHint && <UpdatingPulse />}
             </span>
           </motion.span>
         </AnimatePresence>
       </button>
     </div>
+  );
+}
+
+/** Küçük "güncelleniyor" indicator — pulse eden tek nokta. */
+function UpdatingPulse() {
+  return (
+    <motion.span
+      animate={{ opacity: [0.3, 1, 0.3] }}
+      transition={{ duration: 1.2, repeat: Infinity, ease: "easeInOut" }}
+      className="h-1.5 w-1.5 self-center rounded-full bg-(--color-accent)"
+      title="Güncelleniyor…"
+    />
   );
 }

@@ -147,7 +147,6 @@ export function InvestmentImportModal() {
 
     setSubmitting(true);
     let invSaved = 0;
-    let bgtSaved = 0;
     let failed = 0;
     for (const ym of sortedSelected) {
       const f = forms[ym];
@@ -160,22 +159,6 @@ export function InvestmentImportModal() {
           note: f.note.trim() || null,
         });
         invSaved += 1;
-
-        if (f.advanced && activeBudget) {
-          const inc = parseAmount(f.income) ?? 0;
-          const exp = parseAmount(f.expense) ?? 0;
-          if (inc > 0 || exp > 0) {
-            await api.upsertBudgetEntry({
-              budgetId: activeBudget.id,
-              yearMonth: ym,
-              income: inc,
-              expense: exp,
-              note: f.note.trim() || null,
-              currency: f.currency,
-            });
-            bgtSaved += 1;
-          }
-        }
       } catch (err) {
         failed += 1;
         console.error(`[birik] import ${ym} fail:`, err);
@@ -186,13 +169,11 @@ export function InvestmentImportModal() {
     if (failed > 0) {
       playSound("error");
       toast.error(`${failed} ay kaydedilemedi`, {
-        description: `Yatırım: ${invSaved}, bütçe: ${bgtSaved}`,
+        description: `Yatırım: ${invSaved}`,
       });
     } else {
       playSound("ding");
-      const parts = [`${invSaved} yatırım`];
-      if (bgtSaved > 0) parts.push(`${bgtSaved} bütçe`);
-      toast.success(`${parts.join(" + ")} kaydedildi`);
+      toast.success(`${invSaved} yatırım kaydedildi`);
       closeModal();
     }
   };

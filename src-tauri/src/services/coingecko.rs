@@ -102,6 +102,10 @@ struct SearchCoin {
     name: String,
     #[serde(default)]
     large: Option<String>,
+    /// CoinGecko'nun market cap sıralaması. None = sıralanmamış (genellikle
+    /// çok düşük cap'li token'lar). Sort'ta None'lar sona düşer.
+    #[serde(default, rename = "market_cap_rank")]
+    market_cap_rank: Option<i64>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -110,6 +114,9 @@ pub struct SearchHit {
     pub symbol: String,
     pub name: String,
     pub icon: Option<String>,
+    /// Frontend sort'ta tie-breaker olarak kullanılır (düşük = popüler).
+    /// None ise int max gibi davranır (en sona).
+    pub market_cap_rank: Option<i64>,
 }
 
 pub async fn search(query: &str) -> AppResult<Vec<SearchHit>> {
@@ -129,8 +136,19 @@ pub async fn search(query: &str) -> AppResult<Vec<SearchHit>> {
         )));
     }
     let body: SearchResponse = resp.json().await?;
-    Ok(body
-        .coins
+
+    // Önce market_cap_rank ASC ile sort (None'lar sona). Sonra ilk 20 al.
+    // Bu sayede "HYPE" araması Hyperliquid (top-50) gibi popülerleri önce verir,
+    // aynı sembolü taşıyan rastgele low-cap'leri arkaya iter.
+    let mut coins = body.coins;
+    coins.sort_by(|a, b| match (a.market_cap_rank, b.market_cap_rank) {
+        (Some(x), Some(y)) => x.cmp(&y),
+        (Some(_), None) => std::cmp::Ordering::Less,
+        (None, Some(_)) => std::cmp::Ordering::Greater,
+        (None, None) => std::cmp::Ordering::Equal,
+    });
+
+    Ok(coins
         .into_iter()
         .take(20)
         .map(|c| SearchHit {
@@ -138,6 +156,7 @@ pub async fn search(query: &str) -> AppResult<Vec<SearchHit>> {
             symbol: c.symbol.to_uppercase(),
             name: c.name,
             icon: c.large,
+            market_cap_rank: c.market_cap_rank,
         })
         .collect())
 }

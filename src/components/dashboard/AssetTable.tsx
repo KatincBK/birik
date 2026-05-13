@@ -26,6 +26,7 @@ import {
 import { useFlashOnChange } from "../../hooks/useFlashOnChange";
 import { api, type AssetStats } from "../../lib/api";
 import { aggregateGroup } from "../../lib/groupAssets";
+import { effectiveType } from "../../lib/cashLike";
 import { AddTransactionModal } from "../AddTransactionModal";
 import { EditTransactionModal } from "../EditTransactionModal";
 import { EditAssetPlatformModal } from "../EditAssetPlatformModal";
@@ -57,7 +58,8 @@ export const AssetTable = forwardRef<
     | "plAbs"
     | "plPct"
     | "daily"
-    | "passiveAnnual";
+    | "passiveAnnual"
+    | "passivePct";
   type SortDir = "asc" | "desc";
   const [sort, setSort] = useState<{ key: SortKey; dir: SortDir }>({
     key: "value",
@@ -219,16 +221,20 @@ export const AssetTable = forwardRef<
     for (const a of assets) for (const p of allPlatformsOf(a)) set.add(p);
     return [...set].sort((a, b) => a.localeCompare(b));
   }, [assets]);
+  const cashExtraSymbols = useSettingsStore((s) => s.cashExtraSymbols);
+  const commodityExtraSymbols = useSettingsStore((s) => s.commodityExtraSymbols);
   const typeOptions = useMemo(() => {
     const set = new Set<string>();
-    for (const a of assets) set.add(a.asset_type);
+    for (const a of assets)
+      set.add(effectiveType(a, cashExtraSymbols, commodityExtraSymbols));
     return [...set].sort();
-  }, [assets]);
+  }, [assets, cashExtraSymbols, commodityExtraSymbols]);
   const typeLabel: Record<string, string> = {
     crypto: "Kripto",
     stock: "Hisse",
     fx: "Döviz",
     commodity: "Emtia",
+    cash: "Nakit",
   };
 
   // Bir asset platforma uyuyor mu? Filtre yoksa hep true.
@@ -251,7 +257,13 @@ export const AssetTable = forwardRef<
     const prelim = assets.filter((a) => {
       if (plFilter === "profit" && (a.unrealized_pl_display ?? 0) <= 0) return false;
       if (plFilter === "loss" && (a.unrealized_pl_display ?? 0) >= 0) return false;
-      if (typeFilter.size > 0 && !typeFilter.has(a.asset_type)) return false;
+      if (
+        typeFilter.size > 0 &&
+        !typeFilter.has(
+          effectiveType(a, cashExtraSymbols, commodityExtraSymbols)
+        )
+      )
+        return false;
       return true;
     });
 
@@ -276,7 +288,15 @@ export const AssetTable = forwardRef<
       map.get(key)!.push(a);
     }
     return [...map.values()].map(aggregateGroup);
-  }, [assets, plFilter, platformFilter, typeFilter, groupBySymbol]);
+  }, [
+    assets,
+    plFilter,
+    platformFilter,
+    typeFilter,
+    groupBySymbol,
+    cashExtraSymbols,
+    commodityExtraSymbols,
+  ]);
 
   const togglePlatformFilter = (p: string) => {
     setPlatformFilter((cur) => {
@@ -366,6 +386,8 @@ export const AssetTable = forwardRef<
           if (a.market_value_display == null || a.expected_yield_pct == null)
             return -Infinity;
           return (a.market_value_display * a.expected_yield_pct) / 100;
+        case "passivePct":
+          return a.expected_yield_pct ?? -Infinity;
       }
     };
     list.sort((a, b) => {
@@ -706,12 +728,55 @@ export const AssetTable = forwardRef<
                       Günlük
                     </Th>
                   );
-                case "passiveAnnual":
+                case "passiveAnnual": {
+                  const annualActive = sort.key === "passiveAnnual";
+                  const pctActive = sort.key === "passivePct";
                   return (
-                    <Th key={k} sortKey="passiveAnnual" sort={sort} onSort={toggleSort} align="right">
-                      Pasif (yıl)
-                    </Th>
+                    <th
+                      key={k}
+                      className="px-4 py-2.5 text-right text-[11px] tracking-[0.05em] font-medium uppercase"
+                    >
+                      <span className="inline-flex items-center justify-end gap-1">
+                        <span className="text-(--color-text-tertiary)">Pasif</span>
+                        <button
+                          onClick={() => toggleSort("passiveAnnual")}
+                          className={cn(
+                            "rounded px-1 transition-colors",
+                            annualActive
+                              ? "font-semibold text-(--color-accent)"
+                              : "text-(--color-accent)/70 hover:text-(--color-accent)"
+                          )}
+                          title="Yıllık tutara göre sırala"
+                        >
+                          yıl
+                          {annualActive && (
+                            <span className="ml-0.5 text-[9px]">
+                              {sort.dir === "asc" ? "▲" : "▼"}
+                            </span>
+                          )}
+                        </button>
+                        <span className="text-(--color-text-tertiary)">/</span>
+                        <button
+                          onClick={() => toggleSort("passivePct")}
+                          className={cn(
+                            "rounded px-1 transition-colors",
+                            pctActive
+                              ? "font-semibold text-(--color-accent)"
+                              : "text-(--color-accent)/70 hover:text-(--color-accent)"
+                          )}
+                          title="Yüzde getiriye göre sırala"
+                        >
+                          %
+                          {pctActive && (
+                            <span className="ml-0.5 text-[9px]">
+                              {sort.dir === "asc" ? "▲" : "▼"}
+                            </span>
+                          )}
+                        </button>
+                      </span>
+                    </th>
                   );
+                }
               }
             })}
             <th className="w-10" />
@@ -837,6 +902,9 @@ function AssetRow({
   onContextMenu?: (e: React.MouseEvent) => void;
 }) {
   const flashDir = useFlashOnChange(a.current_price ?? null, 600);
+  const rowCashExtra = useSettingsStore((s) => s.cashExtraSymbols);
+  const rowCommodityExtra = useSettingsStore((s) => s.commodityExtraSymbols);
+  const rowEffectiveType = effectiveType(a, rowCashExtra, rowCommodityExtra);
 
   const flashClass =
     flashDir === "up"
@@ -870,7 +938,7 @@ function AssetRow({
           <AssetIcon
             symbol={a.symbol}
             iconUrl={a.icon_url}
-            type={a.asset_type}
+            type={rowEffectiveType}
             size={subPortfolioName ? 24 : 32}
           />
           <div>
@@ -890,7 +958,7 @@ function AssetRow({
               )}
             </div>
             <div className="text-xs text-(--color-text-tertiary)">
-              {assetTypeLabel(a.asset_type)} • {a.name}
+              {assetTypeLabel(rowEffectiveType)} • {a.name}
             </div>
           </div>
         </div>

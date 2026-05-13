@@ -44,6 +44,9 @@ pub struct SearchResult {
     pub icon: Option<String>,
     pub asset_type: String, // "crypto" | "stock" | "fx" | "commodity"
     pub exchange: Option<String>,
+    /// Kripto için CoinGecko market_cap_rank (frontend sort tie-breaker).
+    /// Diğer tipler için None.
+    pub market_cap_rank: Option<i64>,
 }
 
 #[tauri::command]
@@ -64,6 +67,7 @@ pub async fn search_symbol(
                     icon: h.icon,
                     asset_type: "crypto".into(),
                     exchange: None,
+                    market_cap_rank: h.market_cap_rank,
                 })
                 .collect())
         }
@@ -102,6 +106,7 @@ pub async fn search_symbol(
                     icon: None,
                     asset_type: "stock".into(),
                     exchange: h.item_type,
+                    market_cap_rank: None,
                 });
             }
 
@@ -118,6 +123,7 @@ pub async fn search_symbol(
                     icon: None,
                     asset_type: "stock".into(),
                     exchange: h.exchange,
+                    market_cap_rank: None,
                 });
             }
 
@@ -166,6 +172,7 @@ pub async fn search_symbol(
                         icon: None,
                         asset_type: "fx".into(),
                         exchange: None,
+                        market_cap_rank: None,
                     });
                 }
             }
@@ -191,6 +198,7 @@ pub async fn search_symbol(
                         icon: None,
                         asset_type: "commodity".into(),
                         exchange: Some("COMEX".into()),
+                        market_cap_rank: None,
                     });
                 }
             }
