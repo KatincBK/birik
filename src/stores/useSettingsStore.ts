@@ -29,6 +29,8 @@ type SettingsState = {
   /** Yıllık getiri (XIRR) yatırım kaydı olsa bile alım-satımdan hesaplansın mı.
    *  false (varsayılan) = otomatik: yatırım kaydı varsa ondan, yoksa işlemden. */
   cagrFromTransactions: boolean;
+  /** Yıllık getiri ABD enflasyonuyla düzeltilsin mi (reel). false = nominal. */
+  cagrReal: boolean;
   /** Boot'ta DB'den yüklendi mi */
   hydrated: boolean;
 
@@ -45,6 +47,7 @@ type SettingsState = {
   setBudgetFutureMonths: (n: number) => void;
   toggleValuesHidden: () => void;
   setCagrFromTransactions: (v: boolean) => void;
+  setCagrReal: (v: boolean) => void;
 };
 
 /** Setting key sabitleri — backend ile senkron tutuluyor (PLAN §9). */
@@ -58,6 +61,7 @@ const KEY = {
   budgetFutureMonths: "budget_future_months",
   valuesHidden: "values_hidden",
   cagrFromTransactions: "cagr_from_transactions",
+  cagrReal: "cagr_real",
 };
 
 export const useSettingsStore = create<SettingsState>((set, get) => ({
@@ -71,6 +75,7 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
   budgetFutureMonths: 12,
   valuesHidden: false,
   cagrFromTransactions: false,
+  cagrReal: false,
   hydrated: false,
 
   hydrate: async () => {
@@ -114,6 +119,7 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
       const valuesHidden = (map.get(KEY.valuesHidden) ?? "false") === "true";
       const cagrFromTransactions =
         (map.get(KEY.cagrFromTransactions) ?? "false") === "true";
+      const cagrReal = (map.get(KEY.cagrReal) ?? "false") === "true";
 
       set({
         displayCurrency,
@@ -125,6 +131,7 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
         budgetFutureMonths,
         valuesHidden,
         cagrFromTransactions,
+        cagrReal,
         hydrated: true,
       });
     } catch (err) {
@@ -210,5 +217,9 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
     api
       .setSetting(KEY.cagrFromTransactions, v ? "true" : "false")
       .catch(() => {});
+  },
+  setCagrReal: (v) => {
+    set({ cagrReal: v });
+    api.setSetting(KEY.cagrReal, v ? "true" : "false").catch(() => {});
   },
 }));

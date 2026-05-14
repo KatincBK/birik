@@ -9,6 +9,7 @@ pub mod finnhub;
 pub mod frankfurter;
 pub mod fx;
 pub mod http;
+pub mod inflation;
 pub mod tcmb;
 pub mod url;
 pub mod xirr;

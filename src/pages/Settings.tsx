@@ -47,6 +47,8 @@ export function Settings() {
   const setCagrFromTransactions = useSettingsStore(
     (s) => s.setCagrFromTransactions
   );
+  const cagrReal = useSettingsStore((s) => s.cagrReal);
+  const setCagrReal = useSettingsStore((s) => s.setCagrReal);
   const [budgetFutureMonthsInput, setBudgetFutureMonthsInput] = useState(
     budgetFutureMonths.toString()
   );
@@ -652,6 +654,33 @@ export function Settings() {
                   className={cn(
                     "rounded-md px-3 py-1 text-xs font-medium transition-colors",
                     cagrFromTransactions === opt.v
+                      ? "bg-(--color-bg-hover) text-(--color-text-primary)"
+                      : "text-(--color-text-secondary) hover:text-(--color-text-primary)"
+                  )}
+                >
+                  {opt.label}
+                </button>
+              ))}
+            </div>
+          }
+        />
+        <Row
+          label="Getiri tipi"
+          hint="Nominal: ham XIRR. Reel: her katkı, yapıldığı ayın ABD enflasyonuyla (BLS Core CPI) bugünün doları değerine çekilir — enflasyondan arındırılmış gerçek getiri. Veri çekilemezse nominal'e düşer."
+          right={
+            <div className="flex gap-1 rounded-lg border border-(--color-border-subtle) bg-(--color-bg-base) p-1">
+              {(
+                [
+                  { v: false, label: "Nominal" },
+                  { v: true, label: "Reel" },
+                ] as const
+              ).map((opt) => (
+                <button
+                  key={opt.label}
+                  onClick={() => setCagrReal(opt.v)}
+                  className={cn(
+                    "rounded-md px-3 py-1 text-xs font-medium transition-colors",
+                    cagrReal === opt.v
                       ? "bg-(--color-bg-hover) text-(--color-text-primary)"
                       : "text-(--color-text-secondary) hover:text-(--color-text-primary)"
                   )}

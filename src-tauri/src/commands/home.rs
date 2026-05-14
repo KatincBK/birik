@@ -7,6 +7,7 @@
 //! - Yıllık beklenen pasif gelir (Σ market_value × expected_yield_pct/100)
 //! - Hedef değer ve ilerleme yüzdesi
 
+use chrono::Datelike;
 use serde::Serialize;
 use sqlx::SqlitePool;
 use tauri::State;
@@ -173,6 +174,15 @@ async fn home_summary_inner(
         .await?;
         raw.as_deref() == Some("true")
     };
+    // Reel mod: getiri ABD enflasyonuyla düzeltilsin mi (varsayılan: nominal)
+    let cagr_real: bool = {
+        let raw: Option<String> = sqlx::query_scalar(
+            "SELECT value FROM settings WHERE key = 'cagr_real'",
+        )
+        .fetch_optional(pool)
+        .await?;
+        raw.as_deref() == Some("true")
+    };
 
     let cagr_pct = {
         let mut flows: Vec<(i64, f64)> = Vec::new();
@@ -233,6 +243,20 @@ async fn home_summary_inner(
             current_fx.as_ref(),
         );
         flows.push((chrono::Utc::now().timestamp(), total_value_usd));
+        // Reel mod — her nakit akışı, yapıldığı ayın CPI'ına göre bugünün
+        // doları satın alma gücüne çekilir, sonra XIRR. CPI verisi yoksa
+        // (BLS erişilemedi, cache de yok) sessizce nominal kalır.
+        if cagr_real {
+            if let Some(cpi) = crate::services::inflation::fetch_core_cpi().await {
+                for (date, amount) in flows.iter_mut() {
+                    if let Some(dt) =
+                        chrono::DateTime::<chrono::Utc>::from_timestamp(*date, 0)
+                    {
+                        *amount *= cpi.deflator(dt.year(), dt.month());
+                    }
+                }
+            }
+        }
         crate::services::xirr::xirr(&flows).map(|r| r * 100.0)
     };
 
