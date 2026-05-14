@@ -61,8 +61,6 @@ async fn home_summary_inner(
     let mut total_invested = 0.0;
     let mut total_unrealized = 0.0;
     let mut weighted_yield_value = 0.0;
-    let mut cost_weighted_years = 0.0;
-    let mut total_cost_for_cagr = 0.0;
 
     for p in &portfolios {
         let s = crate::commands::calc::calculate_portfolio_inner(
@@ -76,47 +74,29 @@ async fn home_summary_inner(
         total_unrealized += s.total_unrealized_pl;
 
         for a in &s.assets {
-            if let (Some(mv), Some(y)) = (a.market_value_display, a.expected_yield_pct) {
-                weighted_yield_value += mv * y / 100.0;
-            }
-
-            if a.total_cost_display <= 0.0 {
-                continue;
-            }
-            let first_buy: Option<(Option<i64>,)> = sqlx::query_as(
-                "SELECT MIN(date) FROM transactions
-                 WHERE asset_id = ? AND type = 'buy' AND is_deleted = 0",
-            )
-            .bind(a.asset_id)
-            .fetch_optional(pool)
-            .await?;
-            if let Some((Some(d),)) = first_buy {
-                let now = chrono::Utc::now().timestamp();
-                let secs = (now - d).max(0);
-                let years = secs as f64 / (365.25 * 24.0 * 3600.0);
-                if years > 0.0 {
-                    cost_weighted_years += a.total_cost_display * years;
-                    total_cost_for_cagr += a.total_cost_display;
+            // Hisseler temettü projeksiyonundan gelir (döngüden sonra eklenir);
+            // burada sadece kripto/emtia/döviz'in elle girilmiş getirisi.
+            if a.asset_type != "stock" {
+                if let (Some(mv), Some(y)) = (a.market_value_display, a.expected_yield_pct) {
+                    weighted_yield_value += mv * y / 100.0;
                 }
             }
         }
     }
 
-    let cagr_pct = if total_cost_for_cagr > 0.0 && total_value > 0.0 && total_invested > 0.0 {
-        let avg_years = cost_weighted_years / total_cost_for_cagr;
-        if avg_years > 0.05 {
-            let total_return = total_value / total_invested;
-            if total_return > 0.0 {
-                Some((total_return.powf(1.0 / avg_years) - 1.0) * 100.0)
-            } else {
-                None
-            }
-        } else {
-            None
-        }
-    } else {
-        None
-    };
+    // Hisse temettüleri — geçmiş veriden otomatik projeksiyon. Pasif gelir
+    // sayfasıyla aynı çekirdek mantık (`dividend::compute_projections`) ki
+    // "yıllık pasif gelir" iki ekranda da aynı çıksın.
+    let div_projections = crate::commands::dividend::compute_projections(
+        pool,
+        profile_id,
+        &display_currency,
+    )
+    .await
+    .unwrap_or_default();
+    for d in &div_projections {
+        weighted_yield_value += d.annual_display;
+    }
 
     let budget: Option<crate::db::models::Budget> = sqlx::query_as(
         "SELECT id, name, monthly_income, monthly_expense, currency,
@@ -181,6 +161,81 @@ async fn home_summary_inner(
         Some(avg_in_display)
     };
 
+    // ----- Yıllık getiri (XIRR — para-ağırlıklı). Her para girişi kendi
+    // tarihinden sayılır; naif "değer / yıl" bölmesi YOK. Kaynak: yatırım
+    // kaydı (investment_entries) varsa ondan; yoksa — ya da ayar zorluyorsa —
+    // alım/satım işlemlerinden (takaslar birbirini götürür). Hepsi USD'de.
+    let force_cagr_tx: bool = {
+        let raw: Option<String> = sqlx::query_scalar(
+            "SELECT value FROM settings WHERE key = 'cagr_from_transactions'",
+        )
+        .fetch_optional(pool)
+        .await?;
+        raw.as_deref() == Some("true")
+    };
+
+    let cagr_pct = {
+        let mut flows: Vec<(i64, f64)> = Vec::new();
+        if !force_cagr_tx && !inv_rows.is_empty() {
+            // Kaynak B — yatırım kayıtları (ay ortası tarihli giriş akışları)
+            for (ym, ccy, amount, fx) in &inv_rows {
+                if let Some(ts) = ym_to_unix(ym) {
+                    let usd = match fx {
+                        Some(f) if *f > 0.0 => amount * f,
+                        _ => crate::commands::calc::convert(
+                            *amount,
+                            ccy,
+                            "USD",
+                            current_fx.as_ref(),
+                        ),
+                    };
+                    flows.push((ts, -usd));
+                }
+            }
+        } else {
+            // Kaynak A — alım/satım işlemleri
+            let tx_rows: Vec<(i64, String, f64, f64, f64, Option<f64>, String)> =
+                sqlx::query_as(
+                    "SELECT t.date, t.type, t.quantity, t.price, t.fee,
+                            t.fx_to_usd, a.currency
+                     FROM transactions t
+                     JOIN assets a ON a.id = t.asset_id
+                     JOIN portfolios p ON p.id = a.portfolio_id
+                     WHERE p.profile_id = ? AND t.is_deleted = 0
+                       AND t.type IN ('buy','sell')",
+                )
+                .bind(profile_id)
+                .fetch_all(pool)
+                .await?;
+            for (date, ttype, qty, price, fee, fx, ccy) in &tx_rows {
+                let (gross, sign) = if ttype.as_str() == "buy" {
+                    (*qty * *price + *fee, -1.0) // alış: maliyet, para girişi
+                } else {
+                    (*qty * *price - *fee, 1.0) // satış: net hasılat, çıkış
+                };
+                let usd = match fx {
+                    Some(f) if *f > 0.0 => gross * *f,
+                    _ => crate::commands::calc::convert(
+                        gross,
+                        ccy,
+                        "USD",
+                        current_fx.as_ref(),
+                    ),
+                };
+                flows.push((*date, sign * usd));
+            }
+        }
+        // Final akış — bugünkü portföy değeri (USD)
+        let total_value_usd = crate::commands::calc::convert(
+            total_value,
+            &display_currency,
+            "USD",
+            current_fx.as_ref(),
+        );
+        flows.push((chrono::Utc::now().timestamp(), total_value_usd));
+        crate::services::xirr::xirr(&flows).map(|r| r * 100.0)
+    };
+
     // ----- Hedef: budget.target_currency / target_value → display
     let (target_value_in_display, budget_id) = match &budget {
         Some(b) => {
@@ -230,4 +285,14 @@ async fn home_summary_inner(
         target_progress_pct,
         budget_id,
     })
+}
+
+/// "YYYY-MM" → o ayın 15'inin (ay ortası) unix timestamp'i. XIRR'de yatırım
+/// kaydının tarihi olarak kullanılır.
+fn ym_to_unix(ym: &str) -> Option<i64> {
+    let mut parts = ym.split('-');
+    let y: i32 = parts.next()?.trim().parse().ok()?;
+    let m: u32 = parts.next()?.trim().parse().ok()?;
+    let date = chrono::NaiveDate::from_ymd_opt(y, m, 15)?;
+    Some(date.and_hms_opt(0, 0, 0)?.and_utc().timestamp())
 }

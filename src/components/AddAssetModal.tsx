@@ -358,18 +358,8 @@ export function AddAssetModal({ portfolioId }: { portfolioId: number }) {
     // (Sessizce dolduruluyor; kullanıcıya soru sorulmuyor.)
     setPickedCurrency(t === "fx" ? hit.symbol.toUpperCase() : "USD");
     setStage("form");
-
-    // Hisse ise Finnhub'tan dividend yield çek (key set'liyse) → form default
-    if (t === "stock") {
-      api
-        .fetchStockProfile(hit.symbol)
-        .then((profile) => {
-          if (profile.dividend_yield_pct != null && yieldPct === "") {
-            setYieldPct(profile.dividend_yield_pct.toFixed(2));
-          }
-        })
-        .catch(() => {});
-    }
+    // Hisseler için elle getiri girilmiyor — temettüler Pasif gelir
+    // sayfasında geçmiş veriden otomatik öngörülüyor.
   };
 
 
@@ -718,31 +708,36 @@ export function AddAssetModal({ portfolioId }: { portfolioId: number }) {
           </Field>
         </div>
 
-        <div className="mt-4">
-          <div className="flex items-center gap-1.5">
-            <span className="text-[11px] font-medium tracking-[0.05em] text-(--color-text-secondary) uppercase">
-              Nakit akışı
-            </span>
-            <span className="text-[11px] text-(--color-text-tertiary)">(opsiyonel)</span>
-            <span className="group relative inline-flex" tabIndex={0}>
-              <Info className="h-3 w-3 text-(--color-text-tertiary) hover:text-(--color-text-secondary) cursor-help" />
-              <span className="pointer-events-none absolute left-1/2 top-full z-10 mt-1 w-60 -translate-x-1/2 rounded-md border border-(--color-border-subtle) bg-(--color-bg-panel) px-2.5 py-1.5 text-xs text-(--color-text-secondary) opacity-0 shadow-lg transition-opacity duration-150 group-hover:opacity-100 group-focus:opacity-100">
-                Bu varlık için yıllık beklediğin staking / faiz / temettü oranı (%).
-                Varlık düzeyinde tutulur.
+        {/* Nakit akışı oranı — hisselerde yok (temettüler Pasif gelir
+            sayfasında geçmiş veriden otomatik öngörülüyor). Kripto/emtia/
+            döviz için elle staking/faiz oranı. */}
+        {pickedAssetType !== "stock" && (
+          <div className="mt-4">
+            <div className="flex items-center gap-1.5">
+              <span className="text-[11px] font-medium tracking-[0.05em] text-(--color-text-secondary) uppercase">
+                Nakit akışı
               </span>
-            </span>
+              <span className="text-[11px] text-(--color-text-tertiary)">(opsiyonel)</span>
+              <span className="group relative inline-flex" tabIndex={0}>
+                <Info className="h-3 w-3 text-(--color-text-tertiary) hover:text-(--color-text-secondary) cursor-help" />
+                <span className="pointer-events-none absolute left-1/2 top-full z-10 mt-1 w-60 -translate-x-1/2 rounded-md border border-(--color-border-subtle) bg-(--color-bg-panel) px-2.5 py-1.5 text-xs text-(--color-text-secondary) opacity-0 shadow-lg transition-opacity duration-150 group-hover:opacity-100 group-focus:opacity-100">
+                  Bu varlık için yıllık beklediğin staking / faiz oranı (%).
+                  Varlık düzeyinde tutulur.
+                </span>
+              </span>
+            </div>
+            <div className="mt-1.5 flex items-center gap-2">
+              <input
+                inputMode="decimal"
+                value={yieldPct}
+                onChange={(e) => setYieldPct(e.target.value)}
+                placeholder="örn: 5"
+                className={cn(inputClass, "w-32")}
+              />
+              <span className="text-sm text-(--color-text-tertiary)">% / yıl</span>
+            </div>
           </div>
-          <div className="mt-1.5 flex items-center gap-2">
-            <input
-              inputMode="decimal"
-              value={yieldPct}
-              onChange={(e) => setYieldPct(e.target.value)}
-              placeholder="örn: 5"
-              className={cn(inputClass, "w-32")}
-            />
-            <span className="text-sm text-(--color-text-tertiary)">% / yıl</span>
-          </div>
-        </div>
+        )}
 
         <div className="mt-3">
           <label className="text-[11px] font-medium tracking-[0.05em] text-(--color-text-secondary) uppercase">

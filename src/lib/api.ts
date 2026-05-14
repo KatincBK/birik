@@ -262,6 +262,35 @@ export type PassiveIncomeStats = {
   records_count: number;
 };
 
+/** Bir hissenin önümüzdeki 12 ay temettü projeksiyonu (geçmiş veriden öngörü). */
+export type DividendProjection = {
+  asset_id: number;
+  symbol: string;
+  name: string;
+  icon_url: string | null;
+  /** Eldeki hisse adedi */
+  balance: number;
+  asset_currency: string;
+  frequency:
+    | "monthly"
+    | "quarterly"
+    | "semiannual"
+    | "annual"
+    | "irregular"
+    | "none"
+    | "stopped";
+  payments_per_year: number;
+  /** Tipik hisse başı ödeme (asset para biriminde) */
+  per_payment: number;
+  /** Hisse başı yıllık projeksiyon (asset para biriminde) */
+  annual_per_share: number;
+  /** Pozisyon için yıllık projeksiyon (asset para biriminde) = annual_per_share * balance */
+  annual_native: number;
+  /** annual_native'in display currency'ye çevrilmiş hali */
+  annual_display: number;
+  last_ex_date: number | null;
+};
+
 export type ChartRange = "1d" | "1w" | "1m" | "3m" | "1y" | "max";
 
 export type AssetHistory = {
@@ -691,6 +720,13 @@ export const api = {
       portfolioId,
       displayCurrency,
       period,
+    }),
+  /** Profilin hisselerinin önümüzdeki 12 ay temettü projeksiyonu
+   *  (annual_display = display currency'ye çevrilmiş). */
+  projectDividends: (profileId: number, displayCurrency: string) =>
+    invoke<DividendProjection[]>("project_dividends", {
+      profileId,
+      displayCurrency,
     }),
   homeSummary: (profileId: number, displayCurrency: string) =>
     invoke<HomeSummary>("home_summary", { profileId, displayCurrency }),

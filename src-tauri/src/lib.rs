@@ -92,6 +92,7 @@ pub fn run() {
             commands::calc::validate_sale,
             commands::calc::calculate_portfolio,
             commands::calc::calculate_passive_income,
+            commands::dividend::project_dividends,
             commands::home::home_summary,
             commands::history::fetch_asset_history,
             commands::history::fetch_portfolio_history,

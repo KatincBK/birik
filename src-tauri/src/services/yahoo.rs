@@ -123,6 +123,82 @@ pub async fn fetch_chart(
     Ok(out)
 }
 
+/// Tek bir geçmiş temettü olayı — ex-tarih (unix saniye) + hisse başı tutar.
+#[derive(Debug, Clone)]
+pub struct DividendEvent {
+    pub ex_date: i64,
+    pub amount: f64,
+}
+
+/// Yahoo chart `events=div` ile geçmiş temettü olaylarını çek (ücretsiz,
+/// key gerektirmez). 5 yıllık aralık — sıklık tespiti ve TTM için yeterli.
+/// Sonuç ex-tarihe göre artan sıralı. Temettü ödemeyen hisse → boş liste.
+pub async fn fetch_dividends(symbol: &str) -> AppResult<Vec<DividendEvent>> {
+    #[derive(Debug, Deserialize)]
+    struct Resp {
+        chart: Body,
+    }
+    #[derive(Debug, Deserialize)]
+    struct Body {
+        result: Option<Vec<Item>>,
+    }
+    #[derive(Debug, Deserialize)]
+    struct Item {
+        #[serde(default)]
+        events: Events,
+    }
+    #[derive(Debug, Deserialize, Default)]
+    struct Events {
+        #[serde(default)]
+        dividends: std::collections::HashMap<String, Div>,
+    }
+    #[derive(Debug, Deserialize)]
+    struct Div {
+        amount: f64,
+        date: i64,
+    }
+
+    let s = symbol.trim().to_uppercase();
+    if s.is_empty() {
+        return Err(AppError::validation("Sembol boş"));
+    }
+    let url = format!(
+        "https://query1.finance.yahoo.com/v8/finance/chart/{}?range=5y&interval=1mo&events=div",
+        crate::services::url::encode(&s)
+    );
+    let resp = HTTP
+        .get(&url)
+        .header("Accept", "application/json, text/plain, */*")
+        .header("Accept-Language", "en-US,en;q=0.9")
+        .header("Referer", "https://finance.yahoo.com/")
+        .send()
+        .await?;
+    if !resp.status().is_success() {
+        return Err(AppError::external(format!(
+            "Yahoo dividends HTTP {} ({s})",
+            resp.status()
+        )));
+    }
+    let body: Resp = resp.json().await?;
+    let item = body
+        .chart
+        .result
+        .and_then(|v| v.into_iter().next())
+        .ok_or_else(|| AppError::external(format!("Yahoo dividends no result for {s}")))?;
+    let mut out: Vec<DividendEvent> = item
+        .events
+        .dividends
+        .into_values()
+        .filter(|d| d.amount > 0.0 && d.date > 0)
+        .map(|d| DividendEvent {
+            ex_date: d.date,
+            amount: d.amount,
+        })
+        .collect();
+    out.sort_by_key(|d| d.ex_date);
+    Ok(out)
+}
+
 pub async fn fetch_price(symbol: &str) -> AppResult<StockPrice> {
     let s = symbol.trim().to_uppercase();
     if s.is_empty() {

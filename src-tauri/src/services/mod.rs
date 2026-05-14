@@ -11,6 +11,7 @@ pub mod fx;
 pub mod http;
 pub mod tcmb;
 pub mod url;
+pub mod xirr;
 pub mod yahoo;
 
 pub use db_pool::Db;

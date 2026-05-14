@@ -3,6 +3,7 @@ pub mod asset;
 pub mod backup;
 pub mod budget;
 pub mod calc;
+pub mod dividend;
 pub mod goal;
 pub mod health;
 pub mod history;

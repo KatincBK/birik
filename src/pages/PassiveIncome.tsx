@@ -17,10 +17,12 @@ import { AssetIcon } from "../components/AssetIcon";
 import {
   api,
   type AssetStats,
+  type DividendProjection,
   type PassiveIncomeStats,
   type PortfolioStats,
 } from "../lib/api";
 import { usePortfolioStore } from "../stores/portfolioStore";
+import { useProfileStore } from "../stores/profileStore";
 import { useSettingsStore } from "../stores/useSettingsStore";
 import { formatCurrency } from "../lib/format";
 import { cn } from "../lib/cn";
@@ -48,9 +50,20 @@ const SOURCE_LABELS: Record<string, string> = {
   interest: "Faiz",
 };
 
+const FREQ_LABELS: Record<string, string> = {
+  monthly: "Aylık",
+  quarterly: "Çeyreklik",
+  semiannual: "6 aylık",
+  annual: "Yıllık",
+  irregular: "Düzensiz",
+  none: "Temettü yok",
+  stopped: "Kesilmiş",
+};
+
 export function PassiveIncome() {
   const displayCurrency = useSettingsStore((s) => s.displayCurrency);
   const portfolios = usePortfolioStore((s) => s.portfolios);
+  const profileId = useProfileStore((s) => s.activeId);
   const [period, setPeriod] = useState<Period>("all");
   const [stats, setStats] = useState<PassiveIncomeStats | null>(null);
   const [loading, setLoading] = useState(true);
@@ -60,6 +73,11 @@ export function PassiveIncome() {
   const [assetsLoading, setAssetsLoading] = useState(true);
   const [editingId, setEditingId] = useState<number | null>(null);
   const [editValue, setEditValue] = useState("");
+
+  // Hisse temettü projeksiyonları (otomatik — geçmiş veriden öngörü).
+  // annual_display backend'de display currency'ye çevrilmiş gelir.
+  const [dividends, setDividends] = useState<DividendProjection[]>([]);
+  const [dividendsLoading, setDividendsLoading] = useState(true);
 
   useEffect(() => {
     let cancelled = false;
@@ -108,14 +126,57 @@ export function PassiveIncome() {
     };
   }, [portfolios, displayCurrency]);
 
+  // Hisse temettü projeksiyonları — backend display currency'ye çevirir,
+  // o yüzden displayCurrency değişince yeniden çekilir.
+  useEffect(() => {
+    if (profileId == null) {
+      setDividends([]);
+      setDividendsLoading(false);
+      return;
+    }
+    let cancelled = false;
+    setDividendsLoading(true);
+    api
+      .projectDividends(profileId, displayCurrency)
+      .then((divs) => {
+        if (!cancelled) setDividends(divs);
+      })
+      .catch(() => {
+        if (!cancelled) setDividends([]);
+      })
+      .finally(() => {
+        if (!cancelled) setDividendsLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [profileId, displayCurrency]);
+
+  const dividendMap = useMemo(() => {
+    const m = new Map<number, DividendProjection>();
+    for (const d of dividends) m.set(d.asset_id, d);
+    return m;
+  }, [dividends]);
+
+  /** Bir varlığın yıllık projeksiyonu (display currency). Hisse → otomatik
+   *  temettü projeksiyonu (backend zaten display'e çevirdi); diğer →
+   *  market_value × expected_yield_pct. */
+  const annualFor = (a: AssetStats): number | null => {
+    if (a.asset_type === "stock") {
+      const d = dividendMap.get(a.asset_id);
+      if (!d || d.annual_display <= 0) return null;
+      return d.annual_display;
+    }
+    if (a.market_value_display != null && a.expected_yield_pct != null) {
+      return (a.market_value_display * a.expected_yield_pct) / 100;
+    }
+    return null;
+  };
+
   const totalAnnualEstimate = useMemo(() => {
-    return assets.reduce((acc, a) => {
-      if (a.market_value_display != null && a.expected_yield_pct != null) {
-        return acc + (a.market_value_display * a.expected_yield_pct) / 100;
-      }
-      return acc;
-    }, 0);
-  }, [assets]);
+    return assets.reduce((acc, a) => acc + (annualFor(a) ?? 0), 0);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [assets, dividendMap]);
 
   const startEdit = (a: AssetStats) => {
     setEditingId(a.asset_id);
@@ -209,8 +270,8 @@ export function PassiveIncome() {
               Beklenen yıllık getiri
             </h2>
             <p className="mt-1 text-xs text-(--color-text-tertiary)">
-              Her varlık için tahmini yıllık getiri yüzdesini gir; toplam
-              projeksyon otomatik hesaplanır.
+              Hisse temettüleri geçmiş veriden otomatik öngörülür; kripto/emtia
+              için yıllık getiri yüzdesini elle gir.
             </p>
           </div>
           <div className="text-right">
@@ -218,11 +279,11 @@ export function PassiveIncome() {
               Yıllık toplam
             </div>
             <div className="text-xl font-semibold tabular text-(--color-accent)">
-              {assetsLoading
+              {assetsLoading || dividendsLoading
                 ? "—"
                 : formatCurrency(totalAnnualEstimate, displayCurrency, "summary")}
             </div>
-            {!assetsLoading && totalAnnualEstimate > 0 && (
+            {!assetsLoading && !dividendsLoading && totalAnnualEstimate > 0 && (
               <div className="text-[11px] text-(--color-text-tertiary) tabular">
                 ≈ {formatCurrency(totalAnnualEstimate / 12, displayCurrency, "summary")}
                 /ay
@@ -253,7 +314,7 @@ export function PassiveIncome() {
                     Değer
                   </th>
                   <th className="px-4 py-2.5 text-right text-[11px] font-medium tracking-[0.05em] uppercase">
-                    Yıllık %
+                    Oran / Sıklık
                   </th>
                   <th className="px-4 py-2.5 text-right text-[11px] font-medium tracking-[0.05em] uppercase">
                     Yıllık gelir
@@ -262,10 +323,11 @@ export function PassiveIncome() {
               </thead>
               <tbody>
                 {assets.map((a) => {
-                  const annual =
-                    a.market_value_display != null && a.expected_yield_pct != null
-                      ? (a.market_value_display * a.expected_yield_pct) / 100
-                      : null;
+                  const isStock = a.asset_type === "stock";
+                  const div = isStock
+                    ? dividendMap.get(a.asset_id)
+                    : undefined;
+                  const annual = annualFor(a);
                   const isEditing = editingId === a.asset_id;
                   return (
                     <tr
@@ -300,7 +362,9 @@ export function PassiveIncome() {
                           : "—"}
                       </td>
                       <td className="px-4 py-2.5 text-right">
-                        {isEditing ? (
+                        {isStock ? (
+                          <DividendBadge div={div} loading={dividendsLoading} />
+                        ) : isEditing ? (
                           <div className="inline-flex items-center gap-1">
                             <input
                               autoFocus
@@ -503,6 +567,46 @@ export function PassiveIncome() {
       <div className="text-xs text-(--color-text-tertiary)">
         {stats?.records_count ?? 0} pasif gelir kaydı
       </div>
+    </div>
+  );
+}
+
+/** Hisse temettü sıklık rozeti — Pasif gelir tablosunda "Oran / Sıklık" hücresi. */
+function DividendBadge({
+  div,
+  loading,
+}: {
+  div: DividendProjection | undefined;
+  loading: boolean;
+}) {
+  if (loading && !div) {
+    return <span className="text-xs text-(--color-text-tertiary)">…</span>;
+  }
+  if (!div || div.frequency === "none") {
+    return (
+      <span className="text-xs text-(--color-text-tertiary)">Temettü yok</span>
+    );
+  }
+  if (div.frequency === "stopped") {
+    return (
+      <span
+        className="text-xs text-(--color-text-tertiary)"
+        title="Son temettü çok eski — şirket ödemeyi kesmiş görünüyor"
+      >
+        Kesilmiş
+      </span>
+    );
+  }
+  return (
+    <div className="inline-flex flex-col items-end">
+      <span className="rounded bg-(--color-accent)/15 px-1.5 py-0.5 text-[11px] font-medium text-(--color-accent)">
+        {FREQ_LABELS[div.frequency] ?? div.frequency}
+      </span>
+      {div.per_payment > 0 && (
+        <span className="mt-0.5 tabular text-[10px] text-(--color-text-tertiary)">
+          ≈ {div.per_payment.toFixed(2)} {div.asset_currency}/hisse
+        </span>
+      )}
     </div>
   );
 }

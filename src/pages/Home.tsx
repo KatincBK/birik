@@ -64,7 +64,7 @@ export function Home() {
   const portfolios = usePortfolioStore((s) => s.portfolios);
   const setActivePortfolio = usePortfolioStore((s) => s.setActive);
   const goDashboard = useUIStore((s) => s.goDashboard);
-  const goBudget = useUIStore((s) => s.goBudget);
+  const goInvestments = useUIStore((s) => s.goInvestments);
   const goPassiveIncome = useUIStore((s) => s.goPassiveIncome);
   const openModal = useUIStore((s) => s.openModal);
   const displayCurrency = useSettingsStore((s) => s.displayCurrency);
@@ -194,13 +194,7 @@ export function Home() {
 
   const onCardPortfolio = () => onSelectPortfolio(null);
   const onCardCagr = () => onSelectPortfolio(null);
-  const onCardMonthly = () => {
-    if (activeBudget) {
-      goBudget(activeBudget.id);
-    } else {
-      openModal(<CreateBudgetModal />);
-    }
-  };
+  const onCardMonthly = () => goInvestments();
   const onCardPassive = () => goPassiveIncome();
   const onCardTarget = () => {
     if (activeBudget) {
@@ -231,7 +225,7 @@ export function Home() {
         </div>
       </header>
 
-      {/* 5 küçük kart — sıralama: portföy, yatırım, getiri, pasif, hedef */}
+      {/* 5 küçük kart — sıralama: portföy, getiri, yatırım, pasif, hedef */}
       <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-5">
         <SummaryCard
           icon={<Wallet className="h-3.5 w-3.5" />}
@@ -245,26 +239,6 @@ export function Home() {
           }
           loading={loading}
           onClick={onCardPortfolio}
-        />
-        <SummaryCard
-          icon={<PiggyBank className="h-3.5 w-3.5" />}
-          label="Aylık yatırım"
-          value={
-            summary?.monthly_investment_avg != null
-              ? valuesHidden
-                ? VALUE_MASK
-                : formatCurrency(
-                    summary.monthly_investment_avg,
-                    displayCurrency,
-                    "summary"
-                  )
-              : activeBudget
-              ? "Veri yok"
-              : "Bütçe oluştur"
-          }
-          loading={loading}
-          onClick={onCardMonthly}
-          muted={summary?.monthly_investment_avg == null}
         />
         <SummaryCard
           icon={<TrendingUp className="h-3.5 w-3.5" />}
@@ -285,13 +259,31 @@ export function Home() {
           onClick={onCardCagr}
         />
         <SummaryCard
+          icon={<PiggyBank className="h-3.5 w-3.5" />}
+          label="Aylık yatırım"
+          value={
+            summary?.monthly_investment_avg != null
+              ? valuesHidden
+                ? VALUE_MASK
+                : formatCurrency(
+                    summary.monthly_investment_avg,
+                    displayCurrency,
+                    "summary"
+                  )
+              : "Yatırım ekle"
+          }
+          loading={loading}
+          onClick={onCardMonthly}
+          muted={summary?.monthly_investment_avg == null}
+        />
+        <SummaryCard
           icon={<Sparkles className="h-3.5 w-3.5" />}
           label="Pasif nakit akışı"
           value={
             summary
               ? valuesHidden
-                ? `${VALUE_MASK}/yıl`
-                : `${formatCurrency(summary.passive_income_annual, displayCurrency, "summary")}/yıl`
+                ? `${VALUE_MASK}/ay`
+                : `${formatCurrency(summary.passive_income_annual / 12, displayCurrency, "summary")}/ay`
               : "—"
           }
           loading={loading}

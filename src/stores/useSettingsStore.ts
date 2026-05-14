@@ -26,6 +26,9 @@ type SettingsState = {
   budgetFutureMonths: number;
   /** Gizli mod — toplam değer ve varlık değerleri maskeli gösterilir. */
   valuesHidden: boolean;
+  /** Yıllık getiri (XIRR) yatırım kaydı olsa bile alım-satımdan hesaplansın mı.
+   *  false (varsayılan) = otomatik: yatırım kaydı varsa ondan, yoksa işlemden. */
+  cagrFromTransactions: boolean;
   /** Boot'ta DB'den yüklendi mi */
   hydrated: boolean;
 
@@ -41,6 +44,7 @@ type SettingsState = {
   removeCommoditySymbol: (sym: string) => void;
   setBudgetFutureMonths: (n: number) => void;
   toggleValuesHidden: () => void;
+  setCagrFromTransactions: (v: boolean) => void;
 };
 
 /** Setting key sabitleri — backend ile senkron tutuluyor (PLAN §9). */
@@ -53,6 +57,7 @@ const KEY = {
   commodityExtraSymbols: COMMODITY_EXTRA_KEY,
   budgetFutureMonths: "budget_future_months",
   valuesHidden: "values_hidden",
+  cagrFromTransactions: "cagr_from_transactions",
 };
 
 export const useSettingsStore = create<SettingsState>((set, get) => ({
@@ -65,6 +70,7 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
   commodityExtraSymbols: [],
   budgetFutureMonths: 12,
   valuesHidden: false,
+  cagrFromTransactions: false,
   hydrated: false,
 
   hydrate: async () => {
@@ -106,6 +112,8 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
       })();
 
       const valuesHidden = (map.get(KEY.valuesHidden) ?? "false") === "true";
+      const cagrFromTransactions =
+        (map.get(KEY.cagrFromTransactions) ?? "false") === "true";
 
       set({
         displayCurrency,
@@ -116,6 +124,7 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
         commodityExtraSymbols,
         budgetFutureMonths,
         valuesHidden,
+        cagrFromTransactions,
         hydrated: true,
       });
     } catch (err) {
@@ -195,5 +204,11 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
     const next = !get().valuesHidden;
     set({ valuesHidden: next });
     api.setSetting(KEY.valuesHidden, next ? "true" : "false").catch(() => {});
+  },
+  setCagrFromTransactions: (v) => {
+    set({ cagrFromTransactions: v });
+    api
+      .setSetting(KEY.cagrFromTransactions, v ? "true" : "false")
+      .catch(() => {});
   },
 }));

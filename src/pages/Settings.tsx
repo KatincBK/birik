@@ -43,6 +43,10 @@ export function Settings() {
   const setRefreshInterval = useSettingsStore((s) => s.setRefreshInterval);
   const budgetFutureMonths = useSettingsStore((s) => s.budgetFutureMonths);
   const setBudgetFutureMonths = useSettingsStore((s) => s.setBudgetFutureMonths);
+  const cagrFromTransactions = useSettingsStore((s) => s.cagrFromTransactions);
+  const setCagrFromTransactions = useSettingsStore(
+    (s) => s.setCagrFromTransactions
+  );
   const [budgetFutureMonthsInput, setBudgetFutureMonthsInput] = useState(
     budgetFutureMonths.toString()
   );
@@ -631,6 +635,33 @@ export function Settings() {
             }
           />
         )}
+        <Row
+          label="Yıllık getiri hesabı"
+          hint="Anasayfadaki 'Yıllık getiri' kartı — XIRR (para-ağırlıklı, her giriş kendi tarihinden sayılır). Otomatik: yatırım kaydın varsa ondan, yoksa alım-satım işlemlerinden. 'Alım-satım': yatırım kaydı olsa bile hep işlemlerden hesaplar."
+          right={
+            <div className="flex gap-1 rounded-lg border border-(--color-border-subtle) bg-(--color-bg-base) p-1">
+              {(
+                [
+                  { v: false, label: "Otomatik" },
+                  { v: true, label: "Alım-satım" },
+                ] as const
+              ).map((opt) => (
+                <button
+                  key={opt.label}
+                  onClick={() => setCagrFromTransactions(opt.v)}
+                  className={cn(
+                    "rounded-md px-3 py-1 text-xs font-medium transition-colors",
+                    cagrFromTransactions === opt.v
+                      ? "bg-(--color-bg-hover) text-(--color-text-primary)"
+                      : "text-(--color-text-secondary) hover:text-(--color-text-primary)"
+                  )}
+                >
+                  {opt.label}
+                </button>
+              ))}
+            </div>
+          }
+        />
       </Section>
 
       <Section title="Veri kaynakları">
