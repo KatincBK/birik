@@ -26,6 +26,7 @@ import {
   formatChange,
   changeClass,
   formatRelative,
+  VALUE_MASK,
 } from "../lib/format";
 import { cn } from "../lib/cn";
 
@@ -67,6 +68,7 @@ export function Home() {
   const goPassiveIncome = useUIStore((s) => s.goPassiveIncome);
   const openModal = useUIStore((s) => s.openModal);
   const displayCurrency = useSettingsStore((s) => s.displayCurrency);
+  const valuesHidden = useSettingsStore((s) => s.valuesHidden);
   const activeProfileId = useProfileStore((s) => s.activeId);
   const budgets = useBudgetStore((s) => s.budgets);
   const activeBudget = budgets[0] ?? null;
@@ -183,6 +185,7 @@ export function Home() {
       };
     })
     .filter((d) => d.value > 0);
+  const pieTotal = pieData.reduce((s, d) => s + d.value, 0);
 
   const onSelectPortfolio = (id: number | null) => {
     setActivePortfolio(id);
@@ -221,7 +224,10 @@ export function Home() {
           size="lg"
         />
         <div className={cn("text-base tabular", changeClass(totalUnrealized))}>
-          {formatChange(totalUnrealized, displayCurrency, "summary")} kar/zarar
+          {valuesHidden
+            ? VALUE_MASK
+            : formatChange(totalUnrealized, displayCurrency, "summary")}{" "}
+          kar/zarar
         </div>
       </header>
 
@@ -232,7 +238,9 @@ export function Home() {
           label="Mevcut portföy"
           value={
             summary
-              ? formatCurrency(summary.total_value, displayCurrency, "summary")
+              ? valuesHidden
+                ? VALUE_MASK
+                : formatCurrency(summary.total_value, displayCurrency, "summary")
               : "—"
           }
           loading={loading}
@@ -243,11 +251,13 @@ export function Home() {
           label="Aylık yatırım"
           value={
             summary?.monthly_investment_avg != null
-              ? formatCurrency(
-                  summary.monthly_investment_avg,
-                  displayCurrency,
-                  "summary"
-                )
+              ? valuesHidden
+                ? VALUE_MASK
+                : formatCurrency(
+                    summary.monthly_investment_avg,
+                    displayCurrency,
+                    "summary"
+                  )
               : activeBudget
               ? "Veri yok"
               : "Bütçe oluştur"
@@ -279,7 +289,9 @@ export function Home() {
           label="Pasif nakit akışı"
           value={
             summary
-              ? `${formatCurrency(summary.passive_income_annual, displayCurrency, "summary")}/yıl`
+              ? valuesHidden
+                ? `${VALUE_MASK}/yıl`
+                : `${formatCurrency(summary.passive_income_annual, displayCurrency, "summary")}/yıl`
               : "—"
           }
           loading={loading}
@@ -290,7 +302,9 @@ export function Home() {
           label="Hedef"
           value={
             summary?.target_value != null
-              ? formatCurrency(summary.target_value, displayCurrency, "summary")
+              ? valuesHidden
+                ? VALUE_MASK
+                : formatCurrency(summary.target_value, displayCurrency, "summary")
               : activeBudget
               ? "Hedef belirle"
               : "Bütçe oluştur"
@@ -348,7 +362,9 @@ export function Home() {
                       </div>
                       <div className="text-right">
                         <div className="text-base font-semibold tabular">
-                          {formatCurrency(v, displayCurrency, "summary")}
+                          {valuesHidden
+                            ? VALUE_MASK
+                            : formatCurrency(v, displayCurrency, "summary")}
                         </div>
                         {s && (
                           <div
@@ -357,7 +373,13 @@ export function Home() {
                               changeClass(s.total_unrealized_pl)
                             )}
                           >
-                            {formatChange(s.total_unrealized_pl, displayCurrency, "summary")}
+                            {valuesHidden
+                              ? VALUE_MASK
+                              : formatChange(
+                                  s.total_unrealized_pl,
+                                  displayCurrency,
+                                  "summary"
+                                )}
                           </div>
                         )}
                       </div>
@@ -398,16 +420,39 @@ export function Home() {
                   </Pie>
                   <Tooltip
                     cursor={false}
-                    contentStyle={{
-                      background: "var(--color-bg-panel)",
-                      border: "1px solid var(--color-border-subtle)",
-                      borderRadius: 8,
-                      color: "var(--color-text-primary)",
-                      fontSize: 12,
+                    content={({ active, payload }) => {
+                      if (!active || !payload?.length) return null;
+                      const p = payload[0].payload as {
+                        name: string;
+                        value: number;
+                        fill: string;
+                      };
+                      const pct =
+                        pieTotal > 0 ? (p.value / pieTotal) * 100 : 0;
+                      return (
+                        <div className="rounded-lg border border-(--color-border-subtle) bg-(--color-bg-panel) px-3 py-2 text-xs shadow-lg">
+                          <div className="flex items-center gap-1.5 font-medium text-(--color-text-primary)">
+                            <span
+                              className="h-2 w-2 rounded-full"
+                              style={{ background: p.fill }}
+                            />
+                            {p.name}
+                          </div>
+                          <div className="mt-0.5 tabular text-(--color-text-secondary)">
+                            {valuesHidden
+                              ? VALUE_MASK
+                              : formatCurrency(
+                                  p.value,
+                                  displayCurrency,
+                                  "summary"
+                                )}
+                            <span className="ml-1.5 font-medium text-(--color-accent)">
+                              %{pct.toFixed(1)}
+                            </span>
+                          </div>
+                        </div>
+                      );
                     }}
-                    formatter={(v) =>
-                      formatCurrency(Number(v), displayCurrency, "summary")
-                    }
                   />
                 </PieChart>
               </ResponsiveContainer>

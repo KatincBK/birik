@@ -1,7 +1,7 @@
 import { useMemo } from "react";
 import { Cell, Pie, PieChart, ResponsiveContainer, Tooltip } from "recharts";
 import { assetTypeColor, assetTypeLabel } from "../../lib/colors";
-import { formatCurrency } from "../../lib/format";
+import { formatCurrency, VALUE_MASK } from "../../lib/format";
 import { cn } from "../../lib/cn";
 import { effectiveType } from "../../lib/cashLike";
 import { useSettingsStore } from "../../stores/useSettingsStore";
@@ -36,6 +36,7 @@ export function AllocationPie({
 }) {
   const cashExtraSymbols = useSettingsStore((s) => s.cashExtraSymbols);
   const commodityExtraSymbols = useSettingsStore((s) => s.commodityExtraSymbols);
+  const valuesHidden = useSettingsStore((s) => s.valuesHidden);
   const data = useMemo(() => {
     if (mode === "platform") {
       const totals = new Map<string, number>();
@@ -111,6 +112,9 @@ export function AllocationPie({
       }));
   }, [assets, mode, cashExtraSymbols, commodityExtraSymbols]);
 
+  const total = useMemo(() => data.reduce((s, d) => s + d.value, 0), [data]);
+  const pctOf = (v: number) => (total > 0 ? (v / total) * 100 : 0);
+
   if (data.length === 0) {
     return (
       <div className="grid h-full place-items-center text-center">
@@ -153,22 +157,43 @@ export function AllocationPie({
           </Pie>
           <Tooltip
             cursor={false}
-            contentStyle={{
-              background: "var(--color-bg-panel)",
-              border: "1px solid var(--color-border-subtle)",
-              borderRadius: 8,
-              color: "var(--color-text-primary)",
-              fontSize: 12,
+            content={({ active, payload }) => {
+              if (!active || !payload?.length) return null;
+              const p = payload[0].payload as {
+                label: string;
+                value: number;
+                fill: string;
+              };
+              const pct = pctOf(p.value);
+              return (
+                <div className="rounded-lg border border-(--color-border-subtle) bg-(--color-bg-panel) px-3 py-2 text-xs shadow-lg">
+                  <div className="flex items-center gap-1.5 font-medium text-(--color-text-primary)">
+                    <span
+                      className="h-2 w-2 rounded-full"
+                      style={{ background: p.fill }}
+                    />
+                    {p.label}
+                  </div>
+                  <div className="mt-0.5 tabular text-(--color-text-secondary)">
+                    {valuesHidden
+                      ? VALUE_MASK
+                      : formatCurrency(p.value, displayCurrency, "summary")}
+                    <span className="ml-1.5 font-medium text-(--color-accent)">
+                      %{pct.toFixed(1)}
+                    </span>
+                  </div>
+                </div>
+              );
             }}
-            formatter={(v) => formatCurrency(Number(v), displayCurrency, "summary")}
           />
         </PieChart>
       </ResponsiveContainer>
 
-      {/* Legend */}
-      <div className="mt-2 flex flex-wrap justify-center gap-x-4 gap-y-1.5">
+      {/* Legend — yüzde ile */}
+      <div className="mt-2 flex flex-wrap justify-center gap-x-3 gap-y-1.5">
         {data.map((d) => {
           const unassigned = mode === "platform" && d.key === "—";
+          const pct = pctOf(d.value);
           return (
             <button
               key={d.key}
@@ -185,7 +210,12 @@ export function AllocationPie({
                 className="h-2 w-2 rounded-full"
                 style={{ background: d.fill }}
               />
-              {unassigned ? "+ Platform ata" : d.label}
+              <span>{unassigned ? "+ Platform ata" : d.label}</span>
+              {!unassigned && (
+                <span className="tabular text-(--color-text-tertiary)">
+                  %{pct.toFixed(1)}
+                </span>
+              )}
             </button>
           );
         })}

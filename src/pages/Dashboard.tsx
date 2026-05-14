@@ -15,7 +15,7 @@ import { usePortfolioStore } from "../stores/portfolioStore";
 import { useSettingsStore } from "../stores/useSettingsStore";
 import { useUIStore } from "../stores/uiStore";
 import { buttonPrimary } from "../components/Modal";
-import { formatChange, changeClass } from "../lib/format";
+import { formatChange, changeClass, VALUE_MASK } from "../lib/format";
 import type { Asset } from "../lib/api";
 import { cn } from "../lib/cn";
 
@@ -23,6 +23,7 @@ const EMPTY_ASSETS: Asset[] = [];
 
 export function Dashboard({ activeId }: { activeId: number | null }) {
   const displayCurrency = useSettingsStore((s) => s.displayCurrency);
+  const valuesHidden = useSettingsStore((s) => s.valuesHidden);
   const portfolios = usePortfolioStore((s) => s.portfolios);
   const key = statsKey(activeId, displayCurrency);
 
@@ -101,7 +102,9 @@ export function Dashboard({ activeId }: { activeId: number | null }) {
               </span>
               <span className="text-(--color-text-tertiary)">·</span>
               <span>
-                {stats.total_change_24h != null
+                {valuesHidden
+                  ? VALUE_MASK
+                  : stats.total_change_24h != null
                   ? formatChange(stats.total_change_24h, displayCurrency, "summary")
                   : ""}
               </span>
@@ -118,7 +121,9 @@ export function Dashboard({ activeId }: { activeId: number | null }) {
               stats?.total_unrealized_pl ?? 0
             )}`}
           >
-            {stats
+            {valuesHidden
+              ? VALUE_MASK
+              : stats
               ? formatChange(stats.total_unrealized_pl, displayCurrency, "summary")
               : "—"}
           </div>

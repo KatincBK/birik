@@ -1,6 +1,9 @@
+import { useEffect, useState } from "react";
 import { AnimatePresence, motion } from "framer-motion";
+import { Eye, EyeOff, Settings2 } from "lucide-react";
 import { useSettingsStore } from "../../stores/useSettingsStore";
-import { formatCurrency } from "../../lib/format";
+import { useUIStore } from "../../stores/uiStore";
+import { formatCurrency, VALUE_MASK } from "../../lib/format";
 import { useCountUp } from "../../hooks/useCountUp";
 import { playSound } from "../../lib/sounds";
 
@@ -22,27 +25,69 @@ export function Hero({
 }) {
   const displayCurrency = useSettingsStore((s) => s.displayCurrency);
   const cycle = useSettingsStore((s) => s.cycleCurrency);
+  const valuesHidden = useSettingsStore((s) => s.valuesHidden);
+  const toggleValuesHidden = useSettingsStore((s) => s.toggleValuesHidden);
+  const goSettings = useUIStore((s) => s.goSettings);
   const animatedValue = useCountUp(totalValue, 400);
+
+  // Sağ tık menüsü — toplam değerin üzerinde
+  const [ctxMenu, setCtxMenu] = useState<{ x: number; y: number } | null>(null);
+  useEffect(() => {
+    if (!ctxMenu) return;
+    const close = () => setCtxMenu(null);
+    window.addEventListener("click", close);
+    window.addEventListener("contextmenu", close);
+    return () => {
+      window.removeEventListener("click", close);
+      window.removeEventListener("contextmenu", close);
+    };
+  }, [ctxMenu]);
 
   const onCycle = () => {
     playSound("click");
     cycle();
   };
 
+  const onToggleHidden = () => {
+    playSound("click");
+    toggleValuesHidden();
+  };
+
+  const onContextMenu = (e: React.MouseEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    setCtxMenu({ x: e.clientX, y: e.clientY });
+  };
+
   return (
     <div className="flex flex-col gap-1">
-      <span className="text-[11px] font-medium tracking-[0.05em] text-(--color-text-secondary) uppercase">
-        {label}
-      </span>
+      <div className="flex items-center gap-1.5">
+        <span className="text-[11px] font-medium tracking-[0.05em] text-(--color-text-secondary) uppercase">
+          {label}
+        </span>
+        <button
+          onClick={onToggleHidden}
+          title={valuesHidden ? "Değerleri göster" : "Değerleri gizle"}
+          aria-label={valuesHidden ? "Değerleri göster" : "Değerleri gizle"}
+          className="grid h-5 w-5 place-items-center rounded text-(--color-text-tertiary) transition-colors hover:bg-(--color-bg-hover) hover:text-(--color-text-primary)"
+        >
+          {valuesHidden ? (
+            <EyeOff className="h-3.5 w-3.5" />
+          ) : (
+            <Eye className="h-3.5 w-3.5" />
+          )}
+        </button>
+      </div>
       <button
         onClick={onCycle}
-        title="Para birimi değiştir"
+        onContextMenu={onContextMenu}
+        title="Para birimi değiştir • Sağ tık: gizle / ayarlar"
         className="group inline-flex items-baseline gap-2 self-start rounded-lg px-1 py-0.5 text-left transition-colors duration-150 hover:bg-(--color-bg-hover)"
         style={{ perspective: "600px" }}
       >
         <AnimatePresence mode="wait" initial={false}>
           <motion.span
-            key={displayCurrency}
+            key={valuesHidden ? "hidden" : displayCurrency}
             initial={{ rotateY: -90, opacity: 0 }}
             animate={{ rotateY: 0, opacity: 1 }}
             exit={{ rotateY: 90, opacity: 0 }}
@@ -54,7 +99,9 @@ export function Hero({
             ].join(" ")}
             style={{ transformStyle: "preserve-3d", backfaceVisibility: "hidden" }}
           >
-            {formatCurrency(animatedValue, displayCurrency, "summary")}
+            {valuesHidden
+              ? VALUE_MASK
+              : formatCurrency(animatedValue, displayCurrency, "summary")}
             <span className="inline-flex items-baseline gap-1.5">
               <span className="text-sm font-medium text-(--color-text-tertiary) group-hover:text-(--color-text-secondary)">
                 {displayCurrency}
@@ -64,6 +111,44 @@ export function Hero({
           </motion.span>
         </AnimatePresence>
       </button>
+
+      {ctxMenu && (
+        <div
+          className="fixed z-50 min-w-[200px] overflow-hidden rounded-lg border border-(--color-border-subtle) bg-(--color-bg-panel) py-1 text-sm shadow-2xl shadow-black/50"
+          style={{ top: ctxMenu.y, left: ctxMenu.x }}
+          onClick={(e) => e.stopPropagation()}
+        >
+          <button
+            onClick={() => {
+              onToggleHidden();
+              setCtxMenu(null);
+            }}
+            className="flex w-full items-center gap-2 px-3 py-1.5 text-left text-(--color-text-primary) transition-colors hover:bg-(--color-bg-hover)"
+          >
+            {valuesHidden ? (
+              <>
+                <Eye className="h-3.5 w-3.5" />
+                Değerleri göster
+              </>
+            ) : (
+              <>
+                <EyeOff className="h-3.5 w-3.5" />
+                Değerleri gizle
+              </>
+            )}
+          </button>
+          <button
+            onClick={() => {
+              goSettings();
+              setCtxMenu(null);
+            }}
+            className="flex w-full items-center gap-2 px-3 py-1.5 text-left text-(--color-text-primary) transition-colors hover:bg-(--color-bg-hover)"
+          >
+            <Settings2 className="h-3.5 w-3.5" />
+            Varlık tipi ayarları
+          </button>
+        </div>
+      )}
     </div>
   );
 }

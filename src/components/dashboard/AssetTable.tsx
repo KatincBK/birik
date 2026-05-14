@@ -22,6 +22,7 @@ import {
   formatNumber,
   formatChange,
   changeClass,
+  VALUE_MASK,
 } from "../../lib/format";
 import { useFlashOnChange } from "../../hooks/useFlashOnChange";
 import { api, type AssetStats } from "../../lib/api";
@@ -923,6 +924,7 @@ function AssetRow({
   const flashDir = useFlashOnChange(a.current_price ?? null, 600);
   const rowCashExtra = useSettingsStore((s) => s.cashExtraSymbols);
   const rowCommodityExtra = useSettingsStore((s) => s.commodityExtraSymbols);
+  const valuesHidden = useSettingsStore((s) => s.valuesHidden);
   const rowEffectiveType = effectiveType(a, rowCashExtra, rowCommodityExtra);
 
   const flashClass =
@@ -1054,9 +1056,15 @@ function AssetRow({
           case "value":
             return (
               <Td key={k} align="right" className="tabular font-medium">
-                {a.market_value_display != null
-                  ? formatCurrency(a.market_value_display, displayCurrency, "summary")
-                  : <span className="text-(--color-text-tertiary)">—</span>}
+                {a.market_value_display != null ? (
+                  valuesHidden ? (
+                    <span className="text-(--color-text-tertiary)">{VALUE_MASK}</span>
+                  ) : (
+                    formatCurrency(a.market_value_display, displayCurrency, "summary")
+                  )
+                ) : (
+                  <span className="text-(--color-text-tertiary)">—</span>
+                )}
               </Td>
             );
           case "pl":
@@ -1064,7 +1072,11 @@ function AssetRow({
               <Td key={k} align="right" className="tabular">
                 {a.unrealized_pl_display != null ? (
                   <div className={changeClass(a.unrealized_pl_display)}>
-                    <div>{formatChange(a.unrealized_pl_display, displayCurrency, "summary")}</div>
+                    <div>
+                      {valuesHidden
+                        ? VALUE_MASK
+                        : formatChange(a.unrealized_pl_display, displayCurrency, "summary")}
+                    </div>
                     {pct != null && (
                       <div className="text-xs">
                         {pct > 0 ? "+" : ""}
@@ -1089,7 +1101,11 @@ function AssetRow({
             return (
               <Td key={k} align="right" className="tabular">
                 <div className={changeClass(dailyAbs)}>
-                  <div>{formatChange(dailyAbs, displayCurrency, "summary")}</div>
+                  <div>
+                    {valuesHidden
+                      ? VALUE_MASK
+                      : formatChange(dailyAbs, displayCurrency, "summary")}
+                  </div>
                   <div className="text-xs">
                     {a.price_change_24h_pct > 0 ? "+" : ""}
                     {a.price_change_24h_pct.toFixed(2)}%
@@ -1109,7 +1125,11 @@ function AssetRow({
             const annual = (a.market_value_display * a.expected_yield_pct) / 100;
             return (
               <Td key={k} align="right" className="tabular text-(--color-accent)">
-                <div>{formatCurrency(annual, displayCurrency, "summary")}</div>
+                <div>
+                  {valuesHidden
+                    ? VALUE_MASK
+                    : formatCurrency(annual, displayCurrency, "summary")}
+                </div>
                 <div className="text-xs text-(--color-text-tertiary)">
                   ≈ {a.expected_yield_pct.toFixed(2)}%
                 </div>

@@ -24,6 +24,8 @@ type SettingsState = {
   commodityExtraSymbols: string[];
   /** Bütçe planlamasında bugünden itibaren kaç ay ileri göstereceğiz. */
   budgetFutureMonths: number;
+  /** Gizli mod — toplam değer ve varlık değerleri maskeli gösterilir. */
+  valuesHidden: boolean;
   /** Boot'ta DB'den yüklendi mi */
   hydrated: boolean;
 
@@ -38,6 +40,7 @@ type SettingsState = {
   addCommoditySymbol: (sym: string) => void;
   removeCommoditySymbol: (sym: string) => void;
   setBudgetFutureMonths: (n: number) => void;
+  toggleValuesHidden: () => void;
 };
 
 /** Setting key sabitleri — backend ile senkron tutuluyor (PLAN §9). */
@@ -49,6 +52,7 @@ const KEY = {
   cashExtraSymbols: CASH_EXTRA_KEY,
   commodityExtraSymbols: COMMODITY_EXTRA_KEY,
   budgetFutureMonths: "budget_future_months",
+  valuesHidden: "values_hidden",
 };
 
 export const useSettingsStore = create<SettingsState>((set, get) => ({
@@ -60,6 +64,7 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
   cashExtraSymbols: [],
   commodityExtraSymbols: [],
   budgetFutureMonths: 12,
+  valuesHidden: false,
   hydrated: false,
 
   hydrate: async () => {
@@ -100,6 +105,8 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
         return Number.isFinite(n) && n >= 0 && n <= 120 ? n : 12;
       })();
 
+      const valuesHidden = (map.get(KEY.valuesHidden) ?? "false") === "true";
+
       set({
         displayCurrency,
         currencyCycle,
@@ -108,6 +115,7 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
         cashExtraSymbols,
         commodityExtraSymbols,
         budgetFutureMonths,
+        valuesHidden,
         hydrated: true,
       });
     } catch (err) {
@@ -182,5 +190,10 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
     const clamped = Math.max(0, Math.min(120, Math.round(n)));
     set({ budgetFutureMonths: clamped });
     api.setSetting(KEY.budgetFutureMonths, clamped.toString()).catch(() => {});
+  },
+  toggleValuesHidden: () => {
+    const next = !get().valuesHidden;
+    set({ valuesHidden: next });
+    api.setSetting(KEY.valuesHidden, next ? "true" : "false").catch(() => {});
   },
 }));

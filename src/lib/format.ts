@@ -11,6 +11,9 @@
 
 export type FormatMode = "summary" | "detail";
 
+/** Gizli mod placeholder'ı — gerçek tutar yerine gösterilir. */
+export const VALUE_MASK = "••••";
+
 const CURRENCY_SYMBOLS: Record<string, string> = {
   USD: "$",
   EUR: "€",
