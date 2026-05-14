@@ -671,8 +671,12 @@ export const api = {
     >("search_symbol", { query, assetType }),
 
   // Calc
-  validateSale: (assetId: number, quantity: number) =>
-    invoke<SaleValidation>("validate_sale", { assetId, quantity }),
+  validateSale: (
+    assetId: number,
+    quantity: number,
+    platform: string | null = null
+  ) =>
+    invoke<SaleValidation>("validate_sale", { assetId, quantity, platform }),
   calculatePortfolio: (portfolioId: number, displayCurrency: string) =>
     invoke<PortfolioStats>("calculate_portfolio", {
       portfolioId,

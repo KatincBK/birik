@@ -61,10 +61,18 @@ pub fn position_from_transactions(txns: &[Transaction]) -> PositionSummary {
     let mut cost_usd_locked = 0.0;
     let mut all_buys_have_lock = true;
     let mut had_any_buy = false;
-    // Yield-weighted ortalama: cost-basis ağırlıklı
-    let mut yield_weighted_sum = 0.0;
-    let mut yield_weighted_total = 0.0;
-    let mut had_any_yield = false;
+    // Yield-weighted ortalama — platform-bazlı lot tüketimi. Her buy bir lot
+    // ekler; satış **önce o platformdaki** lot'tan tüketir (alımdaki faiz oranı
+    // zaten platforma bağlı — kullanıcı hem alırken hem satarken platform seçer),
+    // yetmezse kalan lot'lardan FIFO. Ortalama satıştan sonra kalan lot'lardan
+    // hesaplanır. (oransal düşüm yapan eski yöntem oranı hiç değiştirmiyordu.)
+    struct YieldLot {
+        qty: f64,
+        cost_per_unit: f64,
+        yield_pct: Option<f64>,
+        platform: String,
+    }
+    let mut yield_lots: Vec<YieldLot> = Vec::new();
 
     for t in sorted {
         match t.tx_type.as_str() {
@@ -82,12 +90,18 @@ pub fn position_from_transactions(txns: &[Transaction]) -> PositionSummary {
                         all_buys_have_lock = false;
                     }
                 }
-                // Yield weighted (cost-basis ağırlıklı)
-                yield_weighted_total += cost;
-                if let Some(y) = t.expected_yield_pct {
-                    yield_weighted_sum += cost * y;
-                    had_any_yield = true;
-                }
+                // Yield lot — maliyet/birim ağırlıklı, platform etiketli
+                let cpu = if t.quantity > 0.0 {
+                    cost / t.quantity
+                } else {
+                    0.0
+                };
+                yield_lots.push(YieldLot {
+                    qty: t.quantity,
+                    cost_per_unit: cpu,
+                    yield_pct: t.expected_yield_pct,
+                    platform: t.platform.as_deref().unwrap_or("").trim().to_string(),
+                });
             }
             "sell" => {
                 let avg = if s.balance > 0.0 {
@@ -97,14 +111,34 @@ pub fn position_from_transactions(txns: &[Transaction]) -> PositionSummary {
                 };
                 let realized = (t.price - avg) * t.quantity - t.fee;
                 s.realized_pl += realized;
-                // USD-locked + yield oransal düşüm — sell tx'ten önceki balance üzerinden
-                if s.balance > 0.0 {
+                // USD-locked oransal düşüm — sell tx'ten önceki balance üzerinden
+                if s.balance > 0.0 && all_buys_have_lock {
                     let frac = t.quantity / s.balance;
-                    if all_buys_have_lock {
-                        cost_usd_locked -= cost_usd_locked * frac;
+                    cost_usd_locked -= cost_usd_locked * frac;
+                }
+                // Yield lot'larından tüket — YALNIZCA satışın yapıldığı
+                // platformdaki lot'tan, FIFO (alımdaki faiz oranı zaten o
+                // platforma bağlı). Başka platforma TAŞMAZ: bir platformdaki
+                // fazla-satış (oversell) diğer platformun yield hesabını
+                // bozmamalı — kullanıcı zaten her platform için ayrı satış
+                // bacağı/işlemi giriyor. Eşleşmeyen kalan miktar yok sayılır.
+                let sell_plat =
+                    t.platform.as_deref().unwrap_or("").trim().to_string();
+                let mut to_consume = t.quantity;
+                let mut i = 0;
+                while to_consume > 1e-12 && i < yield_lots.len() {
+                    if yield_lots[i].platform != sell_plat {
+                        i += 1;
+                        continue;
                     }
-                    yield_weighted_sum -= yield_weighted_sum * frac;
-                    yield_weighted_total -= yield_weighted_total * frac;
+                    let lot_qty = yield_lots[i].qty;
+                    if lot_qty <= to_consume + 1e-12 {
+                        to_consume -= lot_qty;
+                        yield_lots.remove(i); // sonraki eleman i'ye kayar
+                    } else {
+                        yield_lots[i].qty -= to_consume;
+                        to_consume = 0.0;
+                    }
                 }
                 s.total_cost -= avg * t.quantity;
                 s.balance -= t.quantity;
@@ -113,8 +147,7 @@ pub fn position_from_transactions(txns: &[Transaction]) -> PositionSummary {
                     s.balance = 0.0;
                     s.total_cost = 0.0;
                     cost_usd_locked = 0.0;
-                    yield_weighted_sum = 0.0;
-                    yield_weighted_total = 0.0;
+                    yield_lots.clear();
                 }
             }
             "passive_income" => {
@@ -135,10 +168,22 @@ pub fn position_from_transactions(txns: &[Transaction]) -> PositionSummary {
     } else {
         None
     };
-    s.weighted_yield_pct = if had_any_yield && yield_weighted_total > 0.0 {
-        Some(yield_weighted_sum / yield_weighted_total)
-    } else {
-        None
+    // Kalan lot'lardan maliyet ağırlıklı yield ortalaması
+    s.weighted_yield_pct = {
+        let mut wsum = 0.0;
+        let mut wtot = 0.0;
+        for lot in &yield_lots {
+            if let Some(yp) = lot.yield_pct {
+                let w = lot.qty * lot.cost_per_unit;
+                wsum += w * yp;
+                wtot += w;
+            }
+        }
+        if wtot > 1e-9 {
+            Some(wsum / wtot)
+        } else {
+            None
+        }
     };
     s
 }
@@ -159,25 +204,49 @@ pub struct SaleValidation {
     pub shortage: f64,
 }
 
+/// `platform` verilirse o platformun net bakiyesine göre kontrol edilir
+/// (örn. OKX'te 800 varken 1000 satışı yetersiz sayılır). Boş/None ise
+/// asset'in toplam bakiyesi kullanılır.
 #[tauri::command]
 pub async fn validate_sale(
     db: State<'_, Db>,
     asset_id: i64,
     quantity: f64,
+    platform: Option<String>,
 ) -> AppResult<SaleValidation> {
     let txns = load_transactions(&db.pool, asset_id).await?;
-    let pos = position_from_transactions(&txns);
-    let is_sufficient = quantity <= pos.balance + 1e-9;
-    let shortage = (quantity - pos.balance).max(0.0);
+    let current_balance = match platform.as_deref().map(str::trim) {
+        Some(p) if !p.is_empty() => {
+            // O platformdaki net qty — buy/passive_income (+), sell (-)
+            let mut bal = 0.0;
+            for t in &txns {
+                if t.is_deleted != 0 {
+                    continue;
+                }
+                if t.platform.as_deref().unwrap_or("").trim() != p {
+                    continue;
+                }
+                bal += match t.tx_type.as_str() {
+                    "buy" | "passive_income" => t.quantity,
+                    "sell" => -t.quantity,
+                    _ => 0.0,
+                };
+            }
+            bal
+        }
+        _ => position_from_transactions(&txns).balance,
+    };
+    let is_sufficient = quantity <= current_balance + 1e-9;
+    let shortage = (quantity - current_balance).max(0.0);
     Ok(SaleValidation {
         asset_id,
-        current_balance: pos.balance,
+        current_balance,
         attempted_quantity: quantity,
         is_sufficient,
         suggested_max: if is_sufficient {
             quantity
         } else {
-            pos.balance.max(0.0)
+            current_balance.max(0.0)
         },
         shortage,
     })
@@ -838,6 +907,85 @@ mod tests {
         assert!((p.balance - 1.0).abs() < 1e-9);
         assert!((p.avg_cost - 100.0).abs() < 1e-9);
         assert!((p.realized_pl - 100.0).abs() < 1e-9);
+    }
+
+    #[test]
+    fn weighted_yield_fifo_consumes_oldest_lot() {
+        // 1000 @ %1.5, 300 @ %8, 200 @ %15 — en eski 1000'lik lot satılınca
+        // ortalama yield kalan lot'lardan hesaplanmalı (regression: eski
+        // oransal-düşüm yöntemi oranı hiç değiştirmiyordu).
+        let mut b1 = tx(1, 100, "buy", 1000.0, 1.0, 0.0);
+        b1.expected_yield_pct = Some(1.5);
+        let mut b2 = tx(2, 200, "buy", 300.0, 1.0, 0.0);
+        b2.expected_yield_pct = Some(8.0);
+        let mut b3 = tx(3, 300, "buy", 200.0, 1.0, 0.0);
+        b3.expected_yield_pct = Some(15.0);
+        let sell = tx(4, 400, "sell", 1000.0, 1.0, 0.0);
+
+        let p = position_from_transactions(&[b1, b2, b3, sell]);
+        // Kalan: 300 @ %8 + 200 @ %15 → (300*8 + 200*15) / 500 = 10.8
+        let wy = p.weighted_yield_pct.expect("yield bekleniyor");
+        assert!((wy - 10.8).abs() < 1e-9, "beklenen 10.8, gelen {wy}");
+    }
+
+    #[test]
+    fn weighted_yield_fifo_partial_into_next_lot() {
+        // 100 @ %2, 100 @ %10 — 150 sat → ilk lot biter, ikinciden 50 kalır
+        let mut b1 = tx(1, 100, "buy", 100.0, 1.0, 0.0);
+        b1.expected_yield_pct = Some(2.0);
+        let mut b2 = tx(2, 200, "buy", 100.0, 1.0, 0.0);
+        b2.expected_yield_pct = Some(10.0);
+        let sell = tx(3, 300, "sell", 150.0, 1.0, 0.0);
+
+        let p = position_from_transactions(&[b1, b2, sell]);
+        // Kalan: 50 @ %10 → ortalama 10
+        let wy = p.weighted_yield_pct.expect("yield bekleniyor");
+        assert!((wy - 10.0).abs() < 1e-9, "beklenen 10.0, gelen {wy}");
+    }
+
+    #[test]
+    fn weighted_yield_consumes_from_sold_platform() {
+        // Platform-bazlı: önce B'den 300 @ %8, sonra OKX'ten 1000 @ %1.5,
+        // sonra C'den 200 @ %15 al. OKX'ten 1000 sat → OKX lot'u çıkmalı.
+        // (Global FIFO olsaydı en eski B lot'unu yerdi → yanlış.)
+        let mut b1 = tx(1, 100, "buy", 300.0, 1.0, 0.0);
+        b1.expected_yield_pct = Some(8.0);
+        b1.platform = Some("B".into());
+        let mut b2 = tx(2, 200, "buy", 1000.0, 1.0, 0.0);
+        b2.expected_yield_pct = Some(1.5);
+        b2.platform = Some("OKX".into());
+        let mut b3 = tx(3, 300, "buy", 200.0, 1.0, 0.0);
+        b3.expected_yield_pct = Some(15.0);
+        b3.platform = Some("C".into());
+        let mut sell = tx(4, 400, "sell", 1000.0, 1.0, 0.0);
+        sell.platform = Some("OKX".into());
+
+        let p = position_from_transactions(&[b1, b2, b3, sell]);
+        // Kalan: 300 @ %8 (B) + 200 @ %15 (C) → (300*8 + 200*15) / 500 = 10.8
+        let wy = p.weighted_yield_pct.expect("yield bekleniyor");
+        assert!((wy - 10.8).abs() < 1e-9, "beklenen 10.8, gelen {wy}");
+    }
+
+    #[test]
+    fn weighted_yield_oversell_does_not_cross_platform() {
+        // OKX'te 100 @ %2. B'de 100 @ %5 + 100 @ %20. OKX'ten 150 sat
+        // (fazla satış) → sadece OKX lot'u biter, fazlalık (50) hiçbir yere
+        // taşmaz. B lot'ları dokunulmaz → (100*5 + 100*20) / 200 = 12.5.
+        let mut b1 = tx(1, 100, "buy", 100.0, 1.0, 0.0);
+        b1.expected_yield_pct = Some(2.0);
+        b1.platform = Some("OKX".into());
+        let mut b2 = tx(2, 200, "buy", 100.0, 1.0, 0.0);
+        b2.expected_yield_pct = Some(5.0);
+        b2.platform = Some("B".into());
+        let mut b3 = tx(3, 300, "buy", 100.0, 1.0, 0.0);
+        b3.expected_yield_pct = Some(20.0);
+        b3.platform = Some("B".into());
+        let mut sell = tx(4, 400, "sell", 150.0, 1.0, 0.0);
+        sell.platform = Some("OKX".into());
+
+        let p = position_from_transactions(&[b1, b2, b3, sell]);
+        let wy = p.weighted_yield_pct.expect("yield bekleniyor");
+        assert!((wy - 12.5).abs() < 1e-9, "beklenen 12.5, gelen {wy}");
     }
 
     #[test]

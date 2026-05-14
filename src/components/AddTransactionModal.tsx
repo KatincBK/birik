@@ -21,6 +21,7 @@ import { useUIStore } from "../stores/uiStore";
 import { useStatsStore } from "../stores/statsStore";
 import { useSettingsStore } from "../stores/useSettingsStore";
 import { cn } from "../lib/cn";
+import { formatNumber } from "../lib/format";
 import { playSound } from "../lib/sounds";
 import { celebrateSmall } from "../lib/celebrate";
 
@@ -65,6 +66,12 @@ export function AddTransactionModal({ asset }: { asset: Asset }) {
   const [submitting, setSubmitting] = useState(false);
   const [shakeKey, setShakeKey] = useState(0);
 
+  // Satış doğrulaması için platform-bazlı net bakiyeler ("" = platformsuz)
+  const [platformBalances, setPlatformBalances] = useState<
+    Record<string, number>
+  >({});
+  const [totalBalance, setTotalBalance] = useState(0);
+
   const closeModal = useUIStore((s) => s.closeModal);
   const openModal = useUIStore((s) => s.openModal);
   const create = useTransactionStore((s) => s.create);
@@ -95,6 +102,30 @@ export function AddTransactionModal({ asset }: { asset: Asset }) {
       cancelled = true;
     };
   }, [asset.id, price]);
+
+  // İşlem geçmişinden platform-bazlı net bakiye çıkar (satış doğrulaması için)
+  useEffect(() => {
+    let cancelled = false;
+    api
+      .listTransactions(asset.id, false)
+      .then((txns) => {
+        if (cancelled) return;
+        const map: Record<string, number> = {};
+        let total = 0;
+        for (const t of txns) {
+          const pk = (t.platform ?? "").trim();
+          const delta = t.type === "sell" ? -t.quantity : t.quantity;
+          map[pk] = (map[pk] ?? 0) + delta;
+          total += delta;
+        }
+        setPlatformBalances(map);
+        setTotalBalance(total);
+      })
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+    };
+  }, [asset.id]);
 
   const triggerShake = () => {
     playSound("error");
@@ -180,7 +211,7 @@ export function AddTransactionModal({ asset }: { asset: Asset }) {
     // Satış ise validate
     if (type === "sell") {
       try {
-        const v = await api.validateSale(asset.id, qty);
+        const v = await api.validateSale(asset.id, qty, platformClean);
         if (!v.is_sufficient) {
           openModal(
             <SaleValidationModal
@@ -264,6 +295,47 @@ export function AddTransactionModal({ asset }: { asset: Asset }) {
             />
           </Field>
         </div>
+
+        {/* Satışta: seçili platformun mevcut bakiyesi + yetersizlik uyarısı */}
+        {type === "sell" &&
+          (() => {
+            const pk = platform.trim();
+            const avail = pk ? platformBalances[pk] ?? 0 : totalBalance;
+            const q = parseDecimal(quantity);
+            const over = Number.isFinite(q) && q > avail + 1e-9;
+            return (
+              <div className="mt-1.5 flex items-center justify-between gap-2 text-[11px]">
+                <span
+                  className={
+                    over
+                      ? "text-(--color-warning)"
+                      : "text-(--color-text-tertiary)"
+                  }
+                >
+                  {over
+                    ? `${pk ? `"${pk}"` : "Toplam"} bakiyesi yetersiz — ${formatNumber(
+                        avail,
+                        "detail"
+                      )} mevcut`
+                    : `${pk ? `"${pk}" platformunda` : "Toplam"} mevcut: ${formatNumber(
+                        avail,
+                        "detail"
+                      )}`}
+                </span>
+                {avail > 1e-9 && (
+                  <button
+                    type="button"
+                    onClick={() =>
+                      setQuantity(Number(avail.toPrecision(12)).toString())
+                    }
+                    className="shrink-0 rounded bg-(--color-bg-hover) px-1.5 py-0.5 font-semibold text-(--color-text-secondary) transition-colors hover:bg-(--color-accent)/15 hover:text-(--color-accent)"
+                  >
+                    maks
+                  </button>
+                )}
+              </div>
+            );
+          })()}
 
         {/* Opsiyonel: Platform + Yıllık getiri */}
         <div className="mt-4">
