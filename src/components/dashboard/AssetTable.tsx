@@ -5,7 +5,7 @@ import {
   useMemo,
   useState,
 } from "react";
-import { ChevronRight, ChevronDown, ArrowUp, ArrowDown, Trash2, Pencil, Plus, Building2, GripVertical } from "lucide-react";
+import { ChevronRight, ChevronDown, ArrowUp, ArrowDown, Trash2, Pencil, Plus, Building2, GripVertical, ArrowRightLeft } from "lucide-react";
 import { motion } from "framer-motion";
 import { toast } from "sonner";
 import { useUIStore } from "../../stores/uiStore";
@@ -30,6 +30,7 @@ import { effectiveType } from "../../lib/cashLike";
 import { AddTransactionModal } from "../AddTransactionModal";
 import { EditTransactionModal } from "../EditTransactionModal";
 import { EditAssetPlatformModal } from "../EditAssetPlatformModal";
+import { MoveAssetModal } from "../MoveAssetModal";
 
 export type AssetTableHandle = {
   openFilters: () => void;
@@ -255,6 +256,9 @@ export const AssetTable = forwardRef<
   const filteredAssets = useMemo(() => {
     // 1) Önce ham asset listesini pl/tip filtresine sok.
     const prelim = assets.filter((a) => {
+      // Tamamen satılmış (bakiye ≈ 0) pozisyonları listede gösterme.
+      // Negatif bakiye (fazla satış) görünür kalır — düzeltilmesi gereken durum.
+      if (Math.abs(a.balance) < 1e-9) return false;
       if (plFilter === "profit" && (a.unrealized_pl_display ?? 0) <= 0) return false;
       if (plFilter === "loss" && (a.unrealized_pl_display ?? 0) >= 0) return false;
       if (
@@ -481,6 +485,14 @@ export const AssetTable = forwardRef<
     const stored = useAssetStore.getState().get(ctxMenu.assetId);
     if (!stored) return;
     openModal(<EditAssetPlatformModal asset={stored} />);
+    setCtxMenu(null);
+  };
+
+  const onMove = () => {
+    if (!ctxMenu) return;
+    const stored = useAssetStore.getState().get(ctxMenu.assetId);
+    if (!stored) return;
+    openModal(<MoveAssetModal asset={stored} />);
     setCtxMenu(null);
   };
 
@@ -850,6 +862,13 @@ export const AssetTable = forwardRef<
           >
             <Building2 className="h-3.5 w-3.5" />
             Platform düzenle
+          </button>
+          <button
+            onClick={onMove}
+            className="flex w-full items-center gap-2 px-3 py-1.5 text-left text-(--color-text-primary) transition-colors hover:bg-(--color-bg-hover)"
+          >
+            <ArrowRightLeft className="h-3.5 w-3.5" />
+            Başka portföye taşı
           </button>
           <div className="my-1 border-t border-(--color-border-subtle)" />
           <button

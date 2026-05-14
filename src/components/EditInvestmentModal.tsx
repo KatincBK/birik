@@ -10,7 +10,7 @@ import {
 import { api, type InvestmentEntry } from "../lib/api";
 import { useProfileStore } from "../stores/profileStore";
 import { useUIStore } from "../stores/uiStore";
-import { parseAmount } from "../lib/parseAmount";
+import { parseAmount, isAmountFormula } from "../lib/parseAmount";
 import { playSound } from "../lib/sounds";
 
 const CURRENCIES = ["USD", "TRY", "EUR", "GBP"];
@@ -42,8 +42,10 @@ export function EditInvestmentModal({
 
   const [ym, setYM] = useState(entry?.year_month ?? prefillYM ?? thisMonthYM());
   const [currency, setCurrency] = useState(entry?.currency ?? "USD");
+  // Düzenleme modunda kullanıcının yazdığı işlemi (varsa) olduğu gibi geri
+  // yükle — yoksa hesaplanmış tutarı göster.
   const [amount, setAmount] = useState(
-    entry?.amount != null ? entry.amount.toString() : ""
+    entry?.amount_expr ?? (entry?.amount != null ? entry.amount.toString() : "")
   );
   const [note, setNote] = useState(entry?.note ?? "");
   const [submitting, setSubmitting] = useState(false);
@@ -71,6 +73,8 @@ export function EditInvestmentModal({
         yearMonth: ym,
         currency: currency.toUpperCase(),
         amount: value,
+        // İşlem yazıldıysa ham haliyle sakla — düz sayıysa saklama (null)
+        amountExpr: isAmountFormula(amount) ? amount.trim() : null,
         note: note.trim() || null,
       });
       playSound("ding");
@@ -159,7 +163,7 @@ export function EditInvestmentModal({
       <div className="mt-3">
         <Field
           label="Tutar"
-          hint="Formül de yazabilirsin: 100+200, 1.500-300, vb."
+          hint="İşlem de yazabilirsin: 100+200, 1.500-300, vb. — işlem saklanır, sonra düzenleyebilirsin"
         >
           <input
             autoFocus

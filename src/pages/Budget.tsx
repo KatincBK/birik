@@ -73,8 +73,10 @@ export function Budget({ budgetId }: { budgetId: number }) {
   const [overrides, setOverrides] = useState<BudgetMonthOverride[]>([]);
   const [plan, setPlan] = useState<MonthlyBudget[] | null>(null);
   const [loading, setLoading] = useState(true);
-  // Hangi ay+kind genişletilmiş? key = "YYYY-MM|income" | "YYYY-MM|expense"
-  const [expanded, setExpanded] = useState<Set<string>>(new Set());
+  // Hangi aylar açık? key = "YYYY-MM" — bu ay varsayılan olarak açık gelir
+  const [expanded, setExpanded] = useState<Set<string>>(
+    () => new Set([thisMonthYM()])
+  );
 
   useEffect(() => {
     setActive(budgetId);
@@ -172,12 +174,11 @@ export function Budget({ budgetId }: { budgetId: number }) {
     }
   };
 
-  const toggleExpand = (ym: string, kind: "income" | "expense") => {
-    const key = `${ym}|${kind}`;
+  const toggleExpand = (ym: string) => {
     setExpanded((cur) => {
       const next = new Set(cur);
-      if (next.has(key)) next.delete(key);
-      else next.add(key);
+      if (next.has(ym)) next.delete(ym);
+      else next.add(ym);
       return next;
     });
   };
@@ -398,20 +399,45 @@ export function Budget({ budgetId }: { budgetId: number }) {
             {plan.map((m) => {
               const isCurrentMonth = m.year_month === thisMonthYM();
               const isPast = m.year_month < thisMonthYM();
+              const isOpen = expanded.has(m.year_month);
+              const columns = [
+                {
+                  kind: "income" as const,
+                  label: "Gelir",
+                  lines: linesForMonth(m.year_month, "income"),
+                  total: m.income_display,
+                  color: "text-(--color-success)",
+                },
+                {
+                  kind: "expense" as const,
+                  label: "Gider",
+                  lines: linesForMonth(m.year_month, "expense"),
+                  total: m.expense_display,
+                  color: "text-(--color-danger)",
+                },
+              ];
               return (
                 <li
                   key={m.year_month}
                   className={cn(
-                    "rounded-xl border bg-(--color-bg-panel)",
+                    "overflow-hidden rounded-xl border bg-(--color-bg-panel)",
                     isCurrentMonth
                       ? "border-(--color-accent)/40"
                       : "border-(--color-border-subtle)",
                     m.is_interpolated && "opacity-75"
                   )}
                 >
-                  {/* Ay başlığı */}
-                  <div className="flex items-center justify-between px-4 py-2.5">
+                  {/* Ay başlığı — tıklayınca o ay açılır/kapanır */}
+                  <button
+                    onClick={() => toggleExpand(m.year_month)}
+                    className="flex w-full items-center justify-between gap-3 px-4 py-2.5 text-left transition-colors hover:bg-(--color-bg-hover)"
+                  >
                     <div className="flex items-center gap-2.5">
+                      {isOpen ? (
+                        <ChevronDown className="h-4 w-4 shrink-0 text-(--color-text-tertiary)" />
+                      ) : (
+                        <ChevronRight className="h-4 w-4 shrink-0 text-(--color-text-tertiary)" />
+                      )}
                       <span
                         className={cn(
                           "text-sm font-medium tabular",
@@ -431,136 +457,14 @@ export function Budget({ budgetId }: { budgetId: number }) {
                         </span>
                       )}
                     </div>
-                    {isPast && (
-                      <button
-                        onClick={() => onToggleInterpolate(m.year_month)}
-                        className="inline-flex items-center gap-1 rounded-md px-2 py-1 text-[11px] text-(--color-text-tertiary) transition-colors hover:text-(--color-text-primary)"
-                        title={
-                          m.is_interpolated
-                            ? "Bu ayı gerçek verileriyle göster"
-                            : "Bu ayı komşulardan interpole et"
-                        }
-                      >
-                        {m.is_interpolated ? (
-                          <>
-                            <Eye className="h-3 w-3" />
-                            Gerçek değer
-                          </>
-                        ) : (
-                          <>
-                            <EyeOff className="h-3 w-3" />
-                            Interpole et
-                          </>
-                        )}
-                      </button>
-                    )}
-                  </div>
-
-                  {/* Income + Expense rows */}
-                  <div className="border-t border-(--color-border-subtle)">
-                    {(["income", "expense"] as const).map((kind) => {
-                      const key = `${m.year_month}|${kind}`;
-                      const isOpen = expanded.has(key);
-                      const monthLines = linesForMonth(m.year_month, kind);
-                      const total =
-                        kind === "income" ? m.income_display : m.expense_display;
-                      const label = kind === "income" ? "Gelir" : "Gider";
-                      const color =
-                        kind === "income"
-                          ? "text-(--color-success)"
-                          : "text-(--color-danger)";
-                      return (
-                        <div
-                          key={kind}
-                          className="border-b border-(--color-border-subtle) last:border-b-0"
-                        >
-                          <button
-                            onClick={() => toggleExpand(m.year_month, kind)}
-                            className="flex w-full items-center justify-between px-4 py-2 text-sm transition-colors hover:bg-(--color-bg-hover)"
-                          >
-                            <span className="flex items-center gap-2 text-(--color-text-secondary)">
-                              {isOpen ? (
-                                <ChevronDown className="h-3.5 w-3.5" />
-                              ) : (
-                                <ChevronRight className="h-3.5 w-3.5" />
-                              )}
-                              {label}
-                              <span className="text-[11px] text-(--color-text-tertiary)">
-                                ({monthLines.length})
-                              </span>
-                            </span>
-                            <span className={`tabular ${color}`}>
-                              {formatCurrency(total, displayCurrency, "summary")}
-                            </span>
-                          </button>
-                          {isOpen && (
-                            <div className="border-t border-(--color-border-subtle) bg-(--color-bg-base)/30 px-4 py-2 space-y-1">
-                              {monthLines.length === 0 ? (
-                                <p className="px-2 py-1 text-xs text-(--color-text-tertiary)">
-                                  Bu ay için {label.toLowerCase()} satırı yok.
-                                </p>
-                              ) : (
-                                monthLines.map((l) => (
-                                  <div
-                                    key={l.id}
-                                    className="flex items-center gap-3 rounded-md px-2 py-1 text-sm hover:bg-(--color-bg-hover)"
-                                  >
-                                    <span className="flex-1 truncate">{l.label}</span>
-                                    <span className="tabular text-(--color-text-secondary)">
-                                      {formatCurrency(l.amount, l.currency, "summary")}
-                                    </span>
-                                    <span className="text-[10px] text-(--color-text-tertiary) tracking-wide">
-                                      {rangeLabel(l.start_ym, l.end_ym)}
-                                    </span>
-                                    <button
-                                      onClick={() =>
-                                        openModal(
-                                          <AddBudgetLineModal
-                                            budgetId={budgetId}
-                                            existing={l}
-                                          />
-                                        )
-                                      }
-                                      className="text-(--color-text-tertiary) hover:text-(--color-text-primary)"
-                                      title="Düzenle"
-                                    >
-                                      <Pencil className="h-3.5 w-3.5" />
-                                    </button>
-                                    <button
-                                      onClick={() => onDeleteLine(l)}
-                                      className="text-(--color-text-tertiary) hover:text-(--color-danger)"
-                                      title="Sil"
-                                    >
-                                      <Trash2 className="h-3.5 w-3.5" />
-                                    </button>
-                                  </div>
-                                ))
-                              )}
-                              <button
-                                onClick={() =>
-                                  openModal(
-                                    <AddBudgetLineModal
-                                      budgetId={budgetId}
-                                      defaultKind={kind}
-                                    />
-                                  )
-                                }
-                                className="inline-flex items-center gap-1 rounded-md px-2 py-1 text-xs text-(--color-text-tertiary) transition-colors hover:text-(--color-accent)"
-                              >
-                                <Plus className="h-3 w-3" />
-                                Yeni {label.toLowerCase()} ekle
-                              </button>
-                            </div>
-                          )}
-                        </div>
-                      );
-                    })}
-                    {/* Net */}
-                    <div className="flex items-center justify-between border-t border-(--color-border-subtle) px-4 py-2 text-sm">
-                      <span className="text-(--color-text-tertiary)">Net</span>
+                    {/* Ayın sonucu — gelir eksi gider */}
+                    <span className="flex items-center gap-1.5">
+                      <span className="text-[11px] text-(--color-text-tertiary)">
+                        Net
+                      </span>
                       <span
                         className={cn(
-                          "tabular font-medium",
+                          "tabular text-sm font-semibold",
                           m.net_display >= 0
                             ? "text-(--color-success)"
                             : "text-(--color-danger)"
@@ -568,8 +472,128 @@ export function Budget({ budgetId }: { budgetId: number }) {
                       >
                         {formatCurrency(m.net_display, displayCurrency, "summary")}
                       </span>
+                    </span>
+                  </button>
+
+                  {/* Açılınca: Gelir + Gider yan yana */}
+                  {isOpen && (
+                    <div className="border-t border-(--color-border-subtle)">
+                      <div className="grid grid-cols-2 divide-x divide-(--color-border-subtle)">
+                        {columns.map((col) => (
+                          <div key={col.kind} className="space-y-1 px-4 py-3">
+                            <div className="flex items-center justify-between pb-1">
+                              <span className="text-[11px] font-medium tracking-[0.05em] text-(--color-text-secondary) uppercase">
+                                {col.label}
+                                <span className="ml-1.5 text-(--color-text-tertiary)">
+                                  ({col.lines.length})
+                                </span>
+                              </span>
+                              <span className={`tabular text-sm font-medium ${col.color}`}>
+                                {formatCurrency(col.total, displayCurrency, "summary")}
+                              </span>
+                            </div>
+                            {col.lines.length === 0 ? (
+                              <p className="px-1.5 py-1 text-xs text-(--color-text-tertiary)">
+                                Bu ay için {col.label.toLowerCase()} satırı yok.
+                              </p>
+                            ) : (
+                              col.lines.map((l) => (
+                                <div
+                                  key={l.id}
+                                  className="flex items-center gap-2 rounded-md px-1.5 py-1 text-sm hover:bg-(--color-bg-hover)"
+                                >
+                                  <div className="min-w-0 flex-1">
+                                    <div className="truncate" title={l.label}>
+                                      {l.label}
+                                    </div>
+                                    <div className="text-[10px] tracking-wide text-(--color-text-tertiary)">
+                                      {rangeLabel(l.start_ym, l.end_ym)}
+                                    </div>
+                                  </div>
+                                  <span className="tabular text-(--color-text-secondary)">
+                                    {formatCurrency(l.amount, l.currency, "summary")}
+                                  </span>
+                                  <button
+                                    onClick={() =>
+                                      openModal(
+                                        <AddBudgetLineModal
+                                          budgetId={budgetId}
+                                          existing={l}
+                                        />
+                                      )
+                                    }
+                                    className="shrink-0 text-(--color-text-tertiary) hover:text-(--color-text-primary)"
+                                    title="Düzenle"
+                                  >
+                                    <Pencil className="h-3.5 w-3.5" />
+                                  </button>
+                                  <button
+                                    onClick={() => onDeleteLine(l)}
+                                    className="shrink-0 text-(--color-text-tertiary) hover:text-(--color-danger)"
+                                    title="Sil"
+                                  >
+                                    <Trash2 className="h-3.5 w-3.5" />
+                                  </button>
+                                </div>
+                              ))
+                            )}
+                            <button
+                              onClick={() =>
+                                openModal(
+                                  <AddBudgetLineModal
+                                    budgetId={budgetId}
+                                    defaultKind={col.kind}
+                                  />
+                                )
+                              }
+                              className="inline-flex items-center gap-1 rounded-md px-1.5 py-1 text-xs text-(--color-text-tertiary) transition-colors hover:text-(--color-accent)"
+                            >
+                              <Plus className="h-3 w-3" />
+                              Yeni {col.label.toLowerCase()} ekle
+                            </button>
+                          </div>
+                        ))}
+                      </div>
+                      {/* Footer: net + (geçmiş aylar için) interpole anahtarı */}
+                      <div className="flex items-center justify-between border-t border-(--color-border-subtle) px-4 py-2 text-sm">
+                        {isPast ? (
+                          <button
+                            onClick={() => onToggleInterpolate(m.year_month)}
+                            className="inline-flex items-center gap-1 rounded-md py-1 text-[11px] text-(--color-text-tertiary) transition-colors hover:text-(--color-text-primary)"
+                            title={
+                              m.is_interpolated
+                                ? "Bu ayı gerçek verileriyle göster"
+                                : "Bu ayı komşulardan interpole et"
+                            }
+                          >
+                            {m.is_interpolated ? (
+                              <>
+                                <Eye className="h-3 w-3" />
+                                Gerçek değer
+                              </>
+                            ) : (
+                              <>
+                                <EyeOff className="h-3 w-3" />
+                                Interpole et
+                              </>
+                            )}
+                          </button>
+                        ) : (
+                          <span className="text-(--color-text-tertiary)">Net</span>
+                        )}
+                        <span
+                          className={cn(
+                            "tabular font-medium",
+                            m.net_display >= 0
+                              ? "text-(--color-success)"
+                              : "text-(--color-danger)"
+                          )}
+                        >
+                          {formatCurrency(m.net_display, displayCurrency, "summary")}
+                        </span>
+                      </div>
                     </div>
-                  </div>
+                  )}
                 </li>
               );
             })}

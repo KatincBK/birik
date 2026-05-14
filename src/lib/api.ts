@@ -46,6 +46,8 @@ export type InvestmentEntry = {
   year_month: string;
   currency: string;
   amount: number;
+  /** Kullanıcının tutar alanına yazdığı ham işlem ("300+150-200"); düz sayıysa null */
+  amount_expr: string | null;
   fx_to_usd: number | null;
   note: string | null;
   recorded_at: number;
@@ -130,6 +132,42 @@ export type Transaction = {
   platform: string | null;
   /** Opsiyonel: işlem bazında beklenen yıllık getiri yüzdesi (staking/faiz) */
   expected_yield_pct: number | null;
+};
+
+/** Takas — satılan bacak: portföyde var olan bir asset'ten çıkış. */
+export type SwapSellLeg = {
+  assetId: number;
+  platform: string | null;
+  quantity: number;
+  price: number;
+  fee?: number | null;
+};
+
+/** Takas — alınan bacak: asset find-or-create + buy tx. */
+export type SwapBuyLeg = {
+  symbol: string;
+  name: string;
+  assetType: Asset["type"];
+  currency: string;
+  externalId: string | null;
+  iconUrl: string | null;
+  expectedYieldPct?: number | null;
+  platform: string | null;
+  quantity: number;
+  price: number;
+  fee?: number | null;
+};
+
+export type SwapResult = {
+  sell_count: number;
+  buy_count: number;
+};
+
+export type MoveResult = {
+  mode: "trade" | "transfer";
+  full_transfer: boolean;
+  moved_quantity: number;
+  source_emptied: boolean;
 };
 
 export type CryptoPrice = {
@@ -428,6 +466,7 @@ export const api = {
     yearMonth: string;
     currency: string;
     amount: number;
+    amountExpr?: string | null;
     note: string | null;
   }) =>
     invoke<InvestmentEntry>("upsert_investment_entry", {
@@ -435,6 +474,7 @@ export const api = {
       yearMonth: args.yearMonth,
       currency: args.currency,
       amount: args.amount,
+      amountExpr: args.amountExpr ?? null,
       note: args.note,
     }),
   listInvestmentEntries: (profileId: number) =>
@@ -525,6 +565,36 @@ export const api = {
       tags: args.tags ?? null,
       platform: args.platform ?? null,
       expectedYieldPct: args.expectedYieldPct ?? null,
+    }),
+  /** Çok bacaklı takas — N satılan + M alınan varlık tek atomik işlemde. */
+  createSwapTransaction: (args: {
+    portfolioId: number;
+    date: number;
+    sellLegs: SwapSellLeg[];
+    buyLegs: SwapBuyLeg[];
+    note?: string | null;
+  }) =>
+    invoke<SwapResult>("create_swap_transaction", {
+      portfolioId: args.portfolioId,
+      date: args.date,
+      sellLegs: args.sellLegs,
+      buyLegs: args.buyLegs,
+      note: args.note ?? null,
+    }),
+  /** Bir varlığı başka portföye taşı — ticaret (sat+al) ya da kayıtlı transfer. */
+  moveAssetToPortfolio: (args: {
+    assetId: number;
+    destPortfolioId: number;
+    quantity: number;
+    mode: "trade" | "transfer";
+    price?: number | null;
+  }) =>
+    invoke<MoveResult>("move_asset_to_portfolio", {
+      assetId: args.assetId,
+      destPortfolioId: args.destPortfolioId,
+      quantity: args.quantity,
+      mode: args.mode,
+      price: args.price ?? null,
     }),
   listTransactions: (
     assetId: number,

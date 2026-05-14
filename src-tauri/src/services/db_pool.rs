@@ -70,15 +70,25 @@ async fn ensure_columns(pool: &SqlitePool) -> AppResult<()> {
         ("portfolios", "profile_id", "INTEGER NOT NULL DEFAULT 1"),
         ("budgets", "profile_id", "INTEGER"),
         ("budgets", "target_currency", "TEXT"),
-        ("budget_entries", "currency", "TEXT"),
-        ("budget_entries", "fx_to_usd", "REAL"),
         ("transactions", "fx_to_usd", "REAL"),
         ("assets", "platform", "TEXT"),
         ("transactions", "platform", "TEXT"),
         ("transactions", "expected_yield_pct", "REAL"),
+        ("investment_entries", "amount_expr", "TEXT"),
     ];
 
     for (table, column, def) in required {
+        // Tablo gerçekten var mı? Bir migration tabloyu drop ettiyse
+        // (örn. 013 budget_entries'i siliyor) ALTER TABLE panic eder.
+        let table_exists: Option<i64> =
+            sqlx::query_scalar("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?1")
+                .bind(table)
+                .fetch_optional(pool)
+                .await?;
+        if table_exists.is_none() {
+            continue;
+        }
+
         // PRAGMA için sabit-liste tablo adını doğrudan SQL'e koy
         let check_sql = format!(
             "SELECT 1 FROM pragma_table_info('{}') WHERE name = ?1 LIMIT 1",

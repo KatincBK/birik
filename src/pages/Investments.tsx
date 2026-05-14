@@ -10,7 +10,15 @@ import {
   XAxis,
   YAxis,
 } from "recharts";
-import { Trash2, PiggyBank, TrendingUp, Coins, Plus, Pencil } from "lucide-react";
+import {
+  Trash2,
+  PiggyBank,
+  TrendingUp,
+  Coins,
+  Plus,
+  Pencil,
+  Calculator,
+} from "lucide-react";
 import { toast } from "sonner";
 import { api, type FxRates, type InvestmentEntry } from "../lib/api";
 import { useProfileStore } from "../stores/profileStore";
@@ -478,8 +486,19 @@ export function Investments() {
                                     ? "border-[#FF8B7A]/40 bg-[#FF8B7A]/10 text-[#FF8B7A] hover:bg-[#FF8B7A]/20"
                                     : "border-(--color-border-subtle) bg-(--color-bg-base) text-(--color-text-primary) hover:border-(--color-accent)/40 hover:bg-(--color-accent)/10 hover:text-(--color-accent)"
                                 )}
-                                title="Tık: düzenle • Sağ tık: menü"
+                                title={
+                                  e.amount_expr
+                                    ? `İşlem: ${e.amount_expr} = ${formatCurrency(
+                                        e.amount,
+                                        e.currency,
+                                        "summary"
+                                      )}\nTık: düzenle • Sağ tık: menü`
+                                    : "Tık: düzenle • Sağ tık: menü"
+                                }
                               >
+                                {e.amount_expr && (
+                                  <Calculator className="h-3 w-3 shrink-0 opacity-50" />
+                                )}
                                 <span className="font-medium">
                                   {formatCurrency(e.amount, e.currency, "summary")}
                                 </span>

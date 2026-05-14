@@ -72,6 +72,8 @@ pub fn run() {
             commands::asset::update_asset_yield,
             commands::asset::update_asset_platform,
             commands::transaction::create_transaction,
+            commands::transaction::create_swap_transaction,
+            commands::transaction::move_asset_to_portfolio,
             commands::transaction::update_transaction,
             commands::transaction::list_transactions,
             commands::transaction::list_transaction_tags,

@@ -19,13 +19,17 @@ pub struct InvestmentEntry {
     pub year_month: String,
     pub currency: String,
     pub amount: f64,
+    /// Kullanıcının tutar alanına yazdığı ham işlem ("300+150-200").
+    /// `amount` her zaman hesaplanmış sonuçtur; düz sayı girildiyse None.
+    #[serde(default)]
+    pub amount_expr: Option<String>,
     pub fx_to_usd: Option<f64>,
     pub note: Option<String>,
     pub recorded_at: i64,
 }
 
 const ENTRY_COLS: &str =
-    "profile_id, year_month, currency, amount, fx_to_usd, note, recorded_at";
+    "profile_id, year_month, currency, amount, amount_expr, fx_to_usd, note, recorded_at";
 
 fn ym_to_mid_iso(year_month: &str) -> Option<String> {
     let parts: Vec<&str> = year_month.split('-').collect();
@@ -47,12 +51,17 @@ pub async fn upsert_investment_entry(
     year_month: String,
     currency: String,
     amount: f64,
+    amount_expr: Option<String>,
     note: Option<String>,
 ) -> AppResult<InvestmentEntry> {
     let ccy = currency.trim().to_uppercase();
     if ccy.is_empty() {
         return Err(AppError::validation("Para birimi boş olamaz"));
     }
+    // Ham işlem metni — sadece anlamlı (boş olmayan) ifadeyi sakla.
+    let amount_expr = amount_expr
+        .map(|e| e.trim().to_string())
+        .filter(|e| !e.is_empty());
     // Negatif tutar kabul: bazı aylar net yatırım yerine cüzdandan yenmiş
     // olabilir (geri çekim / portföyden tüketim).
 
@@ -74,10 +83,11 @@ pub async fn upsert_investment_entry(
 
     let row: InvestmentEntry = sqlx::query_as(&format!(
         "INSERT INTO investment_entries
-            (profile_id, year_month, currency, amount, fx_to_usd, note, recorded_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?)
+            (profile_id, year_month, currency, amount, amount_expr, fx_to_usd, note, recorded_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?)
          ON CONFLICT(profile_id, year_month, currency) DO UPDATE SET
             amount = excluded.amount,
+            amount_expr = excluded.amount_expr,
             fx_to_usd = excluded.fx_to_usd,
             note = excluded.note,
             recorded_at = excluded.recorded_at
@@ -87,6 +97,7 @@ pub async fn upsert_investment_entry(
     .bind(&year_month)
     .bind(&ccy)
     .bind(amount)
+    .bind(&amount_expr)
     .bind(fx_to_usd)
     .bind(&note)
     .bind(now_secs())

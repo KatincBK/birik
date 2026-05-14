@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { Plus, Filter, Columns3 } from "lucide-react";
+import { Plus, Filter, Columns3, ArrowLeftRight } from "lucide-react";
 import { toast } from "sonner";
 import { Hero } from "../components/dashboard/Hero";
 import { AllocationPie } from "../components/dashboard/AllocationPie";
@@ -8,6 +8,7 @@ import { PortfolioTrendChart } from "../components/charts/PortfolioTrendChart";
 import { BulkPlatformAssignModal } from "../components/BulkPlatformAssignModal";
 import { Skeleton } from "../components/Skeleton";
 import { AddAssetModal } from "../components/AddAssetModal";
+import { AddSwapModal } from "../components/AddSwapModal";
 import { useAssetStore } from "../stores/assetStore";
 import { useStatsStore, statsKey } from "../stores/statsStore";
 import { usePortfolioStore } from "../stores/portfolioStore";
@@ -65,6 +66,14 @@ export function Dashboard({ activeId }: { activeId: number | null }) {
       return;
     }
     openModal(<AddAssetModal portfolioId={activeId} />);
+  };
+
+  const onAddSwap = () => {
+    if (activeId == null) {
+      toast.info("Önce sol menüden bir portföy seç, sonra işlem ekle");
+      return;
+    }
+    openModal(<AddSwapModal portfolioId={activeId} />);
   };
 
   if (assets.length === 0 && !loading) {
@@ -213,6 +222,13 @@ export function Dashboard({ activeId }: { activeId: number | null }) {
               >
                 <Columns3 className="h-4 w-4" />
                 Düzenle
+              </button>
+              <button
+                onClick={onAddSwap}
+                className="inline-flex items-center gap-1.5 rounded-lg border border-(--color-border-subtle) bg-(--color-bg-panel) px-3 py-2 text-sm font-medium text-(--color-text-secondary) transition-colors hover:border-(--color-accent)/40 hover:text-(--color-accent)"
+              >
+                <ArrowLeftRight className="h-4 w-4" />
+                İşlem Ekle
               </button>
               <button
                 onClick={onAddAsset}

@@ -1,22 +1,19 @@
+use serde::{Deserialize, Serialize};
 use sqlx::SqlitePool;
 use tauri::State;
 
 use crate::commands::now_secs;
-use crate::db::models::Transaction;
+use crate::db::models::{Asset, Transaction};
 use crate::error::{AppError, AppResult};
 use crate::services::Db;
 
-/// transaction.date (unix sec) ve asset.currency için tarihsel USD kur lock.
+/// Bir para birimi + tarih için tarihsel USD kur lock'u.
 /// Hata olursa None — display tarafı current FX ile fallback.
-async fn lock_fx_to_usd(pool: &SqlitePool, asset_id: i64, date: i64) -> Option<f64> {
-    let asset_ccy: Option<(String,)> =
-        sqlx::query_as("SELECT currency FROM assets WHERE id = ?")
-            .bind(asset_id)
-            .fetch_optional(pool)
-            .await
-            .ok()
-            .flatten();
-    let ccy = asset_ccy?.0.to_uppercase();
+async fn lock_fx_for_currency(currency: &str, date: i64) -> Option<f64> {
+    let ccy = currency.trim().to_uppercase();
+    if ccy.is_empty() {
+        return None;
+    }
     if ccy == "USD" {
         return Some(1.0);
     }
@@ -26,15 +23,26 @@ async fn lock_fx_to_usd(pool: &SqlitePool, asset_id: i64, date: i64) -> Option<f
         Ok(v) if v > 0.0 => Some(v),
         Ok(_) => None,
         Err(e) => {
-            log::warn!(
-                "[birik] tx fx lock fail (asset={asset_id}, date={date_iso}, ccy={ccy}): {e}"
-            );
+            log::warn!("[birik] tx fx lock fail (date={date_iso}, ccy={ccy}): {e}");
             None
         }
     }
 }
 
+/// transaction.date (unix sec) ve asset.currency için tarihsel USD kur lock.
+async fn lock_fx_to_usd(pool: &SqlitePool, asset_id: i64, date: i64) -> Option<f64> {
+    let asset_ccy: Option<(String,)> =
+        sqlx::query_as("SELECT currency FROM assets WHERE id = ?")
+            .bind(asset_id)
+            .fetch_optional(pool)
+            .await
+            .ok()
+            .flatten();
+    lock_fx_for_currency(&asset_ccy?.0, date).await
+}
+
 const VALID_TYPES: &[&str] = &["buy", "sell", "passive_income"];
+const VALID_ASSET_TYPES: &[&str] = &["crypto", "stock", "fx", "commodity"];
 const VALID_SOURCES: &[&str] = &["staking", "dividend", "interest"];
 
 /// PLAN §11 edge case'leri burada uygulanıyor:
@@ -368,4 +376,532 @@ pub async fn restore_transaction(db: State<'_, Db>, id: i64) -> AppResult<()> {
         )));
     }
     Ok(())
+}
+
+// ============================================================
+// Takas (swap) — çok bacaklı tek işlem
+// ============================================================
+
+/// Satılan bacak: portföyde zaten var olan bir asset'ten çıkış.
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SwapSellLeg {
+    pub asset_id: i64,
+    pub platform: Option<String>,
+    pub quantity: f64,
+    pub price: f64,
+    pub fee: Option<f64>,
+}
+
+/// Alınan bacak: asset find-or-create + buy tx. `price` birim maliyettir
+/// (frontend satılan değer / alınan miktar ile otomatik hesaplar, override edilebilir).
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SwapBuyLeg {
+    pub symbol: String,
+    pub name: String,
+    pub asset_type: String,
+    pub currency: String,
+    pub external_id: Option<String>,
+    pub icon_url: Option<String>,
+    pub expected_yield_pct: Option<f64>,
+    pub platform: Option<String>,
+    pub quantity: f64,
+    pub price: f64,
+    pub fee: Option<f64>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct SwapResult {
+    pub sell_count: usize,
+    pub buy_count: usize,
+}
+
+/// Tek bir sqlx transaction içinde asset bul-veya-oluştur.
+/// `commands::asset::find_or_create_asset`'in tx üzerinde çalışan kopyası —
+/// takas / portföy taşıma atomikliği için pool yerine connection üzerinden gider.
+#[allow(clippy::too_many_arguments)]
+async fn find_or_create_asset_in_tx(
+    conn: &mut sqlx::SqliteConnection,
+    portfolio_id: i64,
+    symbol: &str,
+    name: &str,
+    asset_type: &str,
+    currency: &str,
+    external_id: Option<&str>,
+    icon_url: Option<&str>,
+    expected_yield_pct: Option<f64>,
+    platform: Option<&str>,
+) -> AppResult<Asset> {
+    let symbol_up = symbol.trim().to_uppercase();
+    if symbol_up.is_empty() {
+        return Err(AppError::validation("Sembol boş olamaz"));
+    }
+    let platform_clean = platform
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty());
+
+    let existing: Option<Asset> = sqlx::query_as(
+        "SELECT id, portfolio_id, symbol, name, type, currency, external_id, created_at,
+                expected_yield_pct, icon_url, platform
+         FROM assets WHERE portfolio_id = ? AND symbol = ?",
+    )
+    .bind(portfolio_id)
+    .bind(&symbol_up)
+    .fetch_optional(&mut *conn)
+    .await?;
+
+    if let Some(a) = existing {
+        let need_update = (a.expected_yield_pct.is_none() && expected_yield_pct.is_some())
+            || (a.icon_url.is_none() && icon_url.is_some())
+            || platform_clean.is_some();
+        if need_update {
+            sqlx::query(
+                "UPDATE assets
+                 SET expected_yield_pct = COALESCE(?, expected_yield_pct),
+                     icon_url = COALESCE(?, icon_url),
+                     platform = COALESCE(?, platform)
+                 WHERE id = ?",
+            )
+            .bind(expected_yield_pct)
+            .bind(icon_url)
+            .bind(&platform_clean)
+            .bind(a.id)
+            .execute(&mut *conn)
+            .await?;
+        }
+        let refreshed: Asset = sqlx::query_as(
+            "SELECT id, portfolio_id, symbol, name, type, currency, external_id, created_at,
+                    expected_yield_pct, icon_url, platform
+             FROM assets WHERE id = ?",
+        )
+        .bind(a.id)
+        .fetch_one(&mut *conn)
+        .await?;
+        return Ok(refreshed);
+    }
+
+    // Yoksa oluştur
+    let name_trimmed = name.trim();
+    let name_final = if name_trimmed.is_empty() {
+        symbol_up.as_str()
+    } else {
+        name_trimmed
+    };
+    let currency_up = currency.trim().to_uppercase();
+    let currency_final = if currency_up.is_empty() {
+        "USD"
+    } else {
+        currency_up.as_str()
+    };
+    let row: Asset = sqlx::query_as(
+        "INSERT INTO assets
+            (portfolio_id, symbol, name, type, currency, external_id, created_at,
+             expected_yield_pct, icon_url, platform)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+         RETURNING id, portfolio_id, symbol, name, type, currency, external_id, created_at,
+                   expected_yield_pct, icon_url, platform",
+    )
+    .bind(portfolio_id)
+    .bind(&symbol_up)
+    .bind(name_final)
+    .bind(asset_type)
+    .bind(currency_final)
+    .bind(external_id)
+    .bind(now_secs())
+    .bind(expected_yield_pct)
+    .bind(icon_url)
+    .bind(&platform_clean)
+    .fetch_one(&mut *conn)
+    .await?;
+    Ok(row)
+}
+
+/// Çok bacaklı takas: N satılan + M alınan varlık tek atomik işlemde.
+/// Her satılan bacak → `sell` tx, her alınan bacak → asset find-or-create + `buy` tx.
+/// Herhangi bir bacak hata verirse tüm işlem geri alınır.
+#[tauri::command]
+pub async fn create_swap_transaction(
+    db: State<'_, Db>,
+    portfolio_id: i64,
+    date: i64,
+    sell_legs: Vec<SwapSellLeg>,
+    buy_legs: Vec<SwapBuyLeg>,
+    note: Option<String>,
+) -> AppResult<SwapResult> {
+    // --- Validation ---
+    if sell_legs.is_empty() || buy_legs.is_empty() {
+        return Err(AppError::validation(
+            "Takas için en az bir satılan ve bir alınan varlık gerekli",
+        ));
+    }
+    if date > now_secs() + 60 {
+        return Err(AppError::validation("Gelecek tarihli işlem girilemez"));
+    }
+    for s in &sell_legs {
+        if s.quantity <= 0.0 {
+            return Err(AppError::validation("Satılan miktar 0'dan büyük olmalı"));
+        }
+        if s.price <= 0.0 {
+            return Err(AppError::validation("Satış fiyatı 0'dan büyük olmalı"));
+        }
+    }
+    for b in &buy_legs {
+        if b.quantity <= 0.0 {
+            return Err(AppError::validation("Alınan miktar 0'dan büyük olmalı"));
+        }
+        if b.price <= 0.0 {
+            return Err(AppError::validation("Alış maliyeti 0'dan büyük olmalı"));
+        }
+        if b.symbol.trim().is_empty() {
+            return Err(AppError::validation("Alınan varlık sembolü boş olamaz"));
+        }
+        if !VALID_ASSET_TYPES.contains(&b.asset_type.as_str()) {
+            return Err(AppError::validation(format!(
+                "Geçersiz varlık tipi: {}",
+                b.asset_type
+            )));
+        }
+    }
+
+    // Son şans schema fix (assets kolonları)
+    crate::commands::asset::ensure_asset_columns(&db.pool).await?;
+
+    // FX lock'ları tx açmadan önce hesapla (frankfurter HTTP çağrısı).
+    let mut sell_fx: Vec<Option<f64>> = Vec::with_capacity(sell_legs.len());
+    for s in &sell_legs {
+        sell_fx.push(lock_fx_to_usd(&db.pool, s.asset_id, date).await);
+    }
+    let mut buy_fx: Vec<Option<f64>> = Vec::with_capacity(buy_legs.len());
+    for b in &buy_legs {
+        buy_fx.push(lock_fx_for_currency(&b.currency, date).await);
+    }
+
+    let note_clean = note
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty());
+
+    // --- Atomik transaction ---
+    let mut tx = db.pool.begin().await?;
+
+    // Satılan bacaklar → sell tx (asset portföye ait mi kontrol et).
+    for (s, fx) in sell_legs.iter().zip(sell_fx.iter()) {
+        let owns: Option<(i64,)> =
+            sqlx::query_as("SELECT 1 FROM assets WHERE id = ? AND portfolio_id = ?")
+                .bind(s.asset_id)
+                .bind(portfolio_id)
+                .fetch_optional(&mut *tx)
+                .await?;
+        if owns.is_none() {
+            return Err(AppError::validation(format!(
+                "Satılan varlık bu portföyde değil: asset_id={}",
+                s.asset_id
+            )));
+        }
+        let platform_clean = s
+            .platform
+            .as_ref()
+            .map(|p| p.trim().to_string())
+            .filter(|p| !p.is_empty());
+        sqlx::query(
+            "INSERT INTO transactions
+                (asset_id, date, type, source, quantity, price, fee, note, is_deleted,
+                 created_at, fx_to_usd, platform, expected_yield_pct)
+             VALUES (?, ?, 'sell', NULL, ?, ?, ?, ?, 0, ?, ?, ?, NULL)",
+        )
+        .bind(s.asset_id)
+        .bind(date)
+        .bind(s.quantity)
+        .bind(s.price)
+        .bind(s.fee.unwrap_or(0.0))
+        .bind(&note_clean)
+        .bind(now_secs())
+        .bind(*fx)
+        .bind(&platform_clean)
+        .execute(&mut *tx)
+        .await?;
+    }
+
+    // Alınan bacaklar → asset find-or-create + buy tx.
+    for (b, fx) in buy_legs.iter().zip(buy_fx.iter()) {
+        let asset = find_or_create_asset_in_tx(
+            &mut *tx,
+            portfolio_id,
+            &b.symbol,
+            &b.name,
+            &b.asset_type,
+            &b.currency,
+            b.external_id.as_deref(),
+            b.icon_url.as_deref(),
+            b.expected_yield_pct,
+            b.platform.as_deref(),
+        )
+        .await?;
+        let platform_clean = b
+            .platform
+            .as_ref()
+            .map(|p| p.trim().to_string())
+            .filter(|p| !p.is_empty());
+        sqlx::query(
+            "INSERT INTO transactions
+                (asset_id, date, type, source, quantity, price, fee, note, is_deleted,
+                 created_at, fx_to_usd, platform, expected_yield_pct)
+             VALUES (?, ?, 'buy', NULL, ?, ?, ?, ?, 0, ?, ?, ?, ?)",
+        )
+        .bind(asset.id)
+        .bind(date)
+        .bind(b.quantity)
+        .bind(b.price)
+        .bind(b.fee.unwrap_or(0.0))
+        .bind(&note_clean)
+        .bind(now_secs())
+        .bind(*fx)
+        .bind(&platform_clean)
+        .bind(b.expected_yield_pct)
+        .execute(&mut *tx)
+        .await?;
+    }
+
+    tx.commit().await?;
+
+    Ok(SwapResult {
+        sell_count: sell_legs.len(),
+        buy_count: buy_legs.len(),
+    })
+}
+
+// ============================================================
+// Portföyler arası taşıma
+// ============================================================
+
+#[derive(Debug, Serialize)]
+pub struct MoveResult {
+    /// "trade" | "transfer"
+    pub mode: String,
+    /// true = tüm bakiye, gerçek kayıtlar taşındı (yalnızca transfer modunda)
+    pub full_transfer: bool,
+    pub moved_quantity: f64,
+    /// Kaynak varlık bu işlemden sonra boşaldı mı (listeden düşer)
+    pub source_emptied: bool,
+}
+
+/// Bir varlığı başka bir portföye taşı.
+///
+/// - `mode = "transfer"` + tüm bakiye → kaynağın tüm işlem kayıtları
+///   (orijinal tarih/fiyat/platform) hedef varlığa taşınır; kaynak varlık silinir
+///   (ya da hedefte yoksa portfolio_id güncellenir). Kâr/zarar oluşmaz.
+/// - `mode = "transfer"` + kısmi → bugün tarihli, **ortalama maliyetten**
+///   bir satış (kaynak) + alış (hedef) çifti. Kâr/zarar oluşmaz, maliyet korunur.
+/// - `mode = "trade"` → bugün tarihli, **güncel fiyattan** satış + alış çifti.
+///   Kaynakta kâr/zarar gerçekleşir, hedefte yeni maliyet bazı oluşur.
+#[tauri::command]
+pub async fn move_asset_to_portfolio(
+    db: State<'_, Db>,
+    asset_id: i64,
+    dest_portfolio_id: i64,
+    quantity: f64,
+    mode: String,
+    price: Option<f64>,
+) -> AppResult<MoveResult> {
+    if mode != "trade" && mode != "transfer" {
+        return Err(AppError::validation("Geçersiz taşıma modu"));
+    }
+    if quantity <= 0.0 {
+        return Err(AppError::validation("Miktar 0'dan büyük olmalı"));
+    }
+
+    crate::commands::asset::ensure_asset_columns(&db.pool).await?;
+
+    // Kaynak varlık
+    let source: Asset = sqlx::query_as(
+        "SELECT id, portfolio_id, symbol, name, type, currency, external_id, created_at,
+                expected_yield_pct, icon_url, platform
+         FROM assets WHERE id = ?",
+    )
+    .bind(asset_id)
+    .fetch_optional(&db.pool)
+    .await?
+    .ok_or_else(|| AppError::not_found(format!("Varlık bulunamadı: id={asset_id}")))?;
+
+    if source.portfolio_id == dest_portfolio_id {
+        return Err(AppError::validation("Kaynak ve hedef portföy aynı olamaz"));
+    }
+    let dest_exists: Option<(i64,)> =
+        sqlx::query_as("SELECT 1 FROM portfolios WHERE id = ?")
+            .bind(dest_portfolio_id)
+            .fetch_optional(&db.pool)
+            .await?;
+    if dest_exists.is_none() {
+        return Err(AppError::not_found("Hedef portföy bulunamadı"));
+    }
+
+    // Pozisyon — balance + ortalama maliyet
+    let txns: Vec<Transaction> = sqlx::query_as(
+        "SELECT id, asset_id, date, type, source, quantity, price, fee, note, is_deleted,
+                created_at, fx_to_usd, platform, expected_yield_pct
+         FROM transactions WHERE asset_id = ?",
+    )
+    .bind(asset_id)
+    .fetch_all(&db.pool)
+    .await?;
+    let pos = crate::commands::calc::position_from_transactions(&txns);
+
+    if pos.balance <= 1e-9 {
+        return Err(AppError::validation("Taşınacak bakiye yok"));
+    }
+    if quantity > pos.balance + 1e-9 {
+        return Err(AppError::validation(format!(
+            "Yetersiz bakiye — mevcut {}",
+            pos.balance
+        )));
+    }
+    let is_full = quantity >= pos.balance - 1e-9;
+    let now = now_secs();
+
+    // ---- TAM TRANSFER: gerçek kayıtları taşı ----
+    if mode == "transfer" && is_full {
+        let mut tx = db.pool.begin().await?;
+        let dest_existing: Option<(i64,)> = sqlx::query_as(
+            "SELECT id FROM assets WHERE portfolio_id = ? AND symbol = ?",
+        )
+        .bind(dest_portfolio_id)
+        .bind(&source.symbol)
+        .fetch_optional(&mut *tx)
+        .await?;
+
+        if let Some((dest_id,)) = dest_existing {
+            // Hedefte aynı sembol var → kayıtları+alarmları taşı, kaynağı sil
+            sqlx::query("UPDATE transactions SET asset_id = ? WHERE asset_id = ?")
+                .bind(dest_id)
+                .bind(asset_id)
+                .execute(&mut *tx)
+                .await?;
+            sqlx::query("UPDATE price_alerts SET asset_id = ? WHERE asset_id = ?")
+                .bind(dest_id)
+                .bind(asset_id)
+                .execute(&mut *tx)
+                .await?;
+            sqlx::query("DELETE FROM assets WHERE id = ?")
+                .bind(asset_id)
+                .execute(&mut *tx)
+                .await?;
+        } else {
+            // Hedefte yok → varlığı direkt taşı (geçmiş, alarm, cache hepsi gelir)
+            sqlx::query("UPDATE assets SET portfolio_id = ? WHERE id = ?")
+                .bind(dest_portfolio_id)
+                .bind(asset_id)
+                .execute(&mut *tx)
+                .await?;
+        }
+        tx.commit().await?;
+        return Ok(MoveResult {
+            mode,
+            full_transfer: true,
+            moved_quantity: pos.balance,
+            source_emptied: true,
+        });
+    }
+
+    // ---- KISMİ TRANSFER veya TİCARET: sell + buy çifti ----
+    let unit_price: f64 = if mode == "transfer" {
+        if pos.avg_cost <= 0.0 {
+            return Err(AppError::validation(
+                "Ortalama maliyet hesaplanamadı — transfer yapılamıyor",
+            ));
+        }
+        pos.avg_cost
+    } else {
+        match price {
+            Some(p) if p > 0.0 => p,
+            _ => {
+                let cached: Option<(f64,)> =
+                    sqlx::query_as("SELECT price FROM price_cache WHERE asset_id = ?")
+                        .bind(asset_id)
+                        .fetch_optional(&db.pool)
+                        .await?;
+                match cached {
+                    Some((p,)) if p > 0.0 => p,
+                    _ => {
+                        return Err(AppError::validation(
+                            "Güncel fiyat bulunamadı — ticaret için fiyat gerekli",
+                        ))
+                    }
+                }
+            }
+        }
+    };
+
+    let fx = lock_fx_for_currency(&source.currency, now).await;
+    let platform_clean = source
+        .platform
+        .as_ref()
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty());
+    let note = if mode == "transfer" {
+        "Portföyler arası transfer"
+    } else {
+        "Portföyler arası ticaret"
+    };
+
+    let mut tx = db.pool.begin().await?;
+
+    // Kaynaktan çıkış (satış)
+    sqlx::query(
+        "INSERT INTO transactions
+            (asset_id, date, type, source, quantity, price, fee, note, is_deleted,
+             created_at, fx_to_usd, platform, expected_yield_pct)
+         VALUES (?, ?, 'sell', NULL, ?, ?, 0, ?, 0, ?, ?, ?, NULL)",
+    )
+    .bind(asset_id)
+    .bind(now)
+    .bind(quantity)
+    .bind(unit_price)
+    .bind(note)
+    .bind(now)
+    .bind(fx)
+    .bind(&platform_clean)
+    .execute(&mut *tx)
+    .await?;
+
+    // Hedefe giriş (alış) — asset bul-veya-oluştur
+    let dest_asset = find_or_create_asset_in_tx(
+        &mut *tx,
+        dest_portfolio_id,
+        &source.symbol,
+        &source.name,
+        &source.asset_type,
+        &source.currency,
+        source.external_id.as_deref(),
+        source.icon_url.as_deref(),
+        source.expected_yield_pct,
+        platform_clean.as_deref(),
+    )
+    .await?;
+
+    sqlx::query(
+        "INSERT INTO transactions
+            (asset_id, date, type, source, quantity, price, fee, note, is_deleted,
+             created_at, fx_to_usd, platform, expected_yield_pct)
+         VALUES (?, ?, 'buy', NULL, ?, ?, 0, ?, 0, ?, ?, ?, ?)",
+    )
+    .bind(dest_asset.id)
+    .bind(now)
+    .bind(quantity)
+    .bind(unit_price)
+    .bind(note)
+    .bind(now)
+    .bind(fx)
+    .bind(&platform_clean)
+    .bind(source.expected_yield_pct)
+    .execute(&mut *tx)
+    .await?;
+
+    tx.commit().await?;
+
+    Ok(MoveResult {
+        mode,
+        full_transfer: false,
+        moved_quantity: quantity,
+        source_emptied: is_full,
+    })
 }

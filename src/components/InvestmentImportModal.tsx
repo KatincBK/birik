@@ -14,7 +14,7 @@ import { useProfileStore } from "../stores/profileStore";
 import { useBudgetStore } from "../stores/budgetStore";
 import { useUIStore } from "../stores/uiStore";
 import { playSound } from "../lib/sounds";
-import { parseAmount } from "../lib/parseAmount";
+import { parseAmount, isAmountFormula } from "../lib/parseAmount";
 import { cn } from "../lib/cn";
 
 const CURRENCIES = ["USD", "TRY", "EUR", "GBP"];
@@ -156,6 +156,7 @@ export function InvestmentImportModal() {
           yearMonth: ym,
           currency: f.currency,
           amount: parseAmount(f.amount) ?? 0,
+          amountExpr: isAmountFormula(f.amount) ? f.amount.trim() : null,
           note: f.note.trim() || null,
         });
         invSaved += 1;

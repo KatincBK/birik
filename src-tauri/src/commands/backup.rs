@@ -111,7 +111,7 @@ pub async fn build_export_payload(pool: &SqlitePool) -> AppResult<ExportPayload>
         .fetch_all(pool)
         .await?;
     let investment_entries: Vec<InvestmentEntry> = sqlx::query_as(
-        "SELECT profile_id, year_month, currency, amount, fx_to_usd, note, recorded_at
+        "SELECT profile_id, year_month, currency, amount, amount_expr, fx_to_usd, note, recorded_at
          FROM investment_entries",
     )
     .fetch_all(pool)
@@ -380,13 +380,14 @@ async fn do_replace(pool: &SqlitePool, p: ExportPayload) -> AppResult<ImportResu
     for ie in &p.investment_entries {
         sqlx::query(
             "INSERT INTO investment_entries
-                (profile_id, year_month, currency, amount, fx_to_usd, note, recorded_at)
-             VALUES (?, ?, ?, ?, ?, ?, ?)",
+                (profile_id, year_month, currency, amount, amount_expr, fx_to_usd, note, recorded_at)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
         )
         .bind(ie.profile_id)
         .bind(&ie.year_month)
         .bind(&ie.currency)
         .bind(ie.amount)
+        .bind(&ie.amount_expr)
         .bind(ie.fx_to_usd)
         .bind(&ie.note)
         .bind(ie.recorded_at)
@@ -620,13 +621,14 @@ async fn do_merge(pool: &SqlitePool, p: ExportPayload) -> AppResult<ImportResult
         if existing.is_none() {
             sqlx::query(
                 "INSERT INTO investment_entries
-                    (profile_id, year_month, currency, amount, fx_to_usd, note, recorded_at)
-                 VALUES (?, ?, ?, ?, ?, ?, ?)",
+                    (profile_id, year_month, currency, amount, amount_expr, fx_to_usd, note, recorded_at)
+                 VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
             )
             .bind(ie.profile_id)
             .bind(&ie.year_month)
             .bind(&ie.currency)
             .bind(ie.amount)
+            .bind(&ie.amount_expr)
             .bind(ie.fx_to_usd)
             .bind(&ie.note)
             .bind(ie.recorded_at)

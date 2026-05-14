@@ -99,3 +99,13 @@ export function parseAmount(raw: string): number | null {
   if (!Number.isFinite(n)) return null;
   return negativeFromParens ? -n : n;
 }
+
+/**
+ * Girdi bir aritmetik işlem mi? (baştaki +/- işareti hariç bir operatör
+ * içeriyorsa). `parseAmount`'un formül modu ile aynı kriter — formülü ham
+ * haliyle saklamak isteyen yerler bununla karar verir.
+ */
+export function isAmountFormula(raw: string): boolean {
+  if (typeof raw !== "string") return false;
+  return /[+\-*/]/.test(raw.trim().replace(/^[-+]/, ""));
+}
