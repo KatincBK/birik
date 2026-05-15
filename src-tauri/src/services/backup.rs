@@ -1,9 +1,12 @@
 //! Yedekleme servisi — PLAN §12 Faz 7.
 //!
-//! - `write_backup(app, pool)`: AppData/com.birik.app/backups/yyyy-mm-dd-HHMMSS.json
+//! - `write_backup(app, pool)`: <Documents>/Birik/backups/yyyy-mm-dd-HHMMSS.json
+//!   Documents altında — uygulama uninstall edilse bile yedekler kaybolmaz.
 //! - `prune_old(dir, keep)`: en eski dosyaları sil, son `keep` taneyi tut
-//! - `spawn_daily(app)`: 24 saatte bir otomatik backup loop'u
+//! - `spawn_daily_snapshots(app)`: portfolio_snapshots tablosu için 24 saatte bir tick
+//! - `spawn_periodic_backup(app)`: 5 dk'da bir JSON yedek (idle olsa bile)
 //! - `mark_dirty()` + `spawn_tx_writer(app)`: her transaction sonrası debounced backup
+//! - `write_immediate_backup(app)`: boot anında hemen 1 yedek (DB ready olunca çağrılır)
 
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -17,8 +20,9 @@ use tokio::sync::Notify;
 use crate::commands::backup::build_export_payload;
 use crate::services::Db;
 
-const KEEP_DAILY: usize = 30; // tx-backup pattern: günlük yedek + tx başı yedek; 30 tane sakla
+const KEEP: usize = 50; // periyodik + tx-bazlı yedekler birlikte ~50 dosya tutar
 const TX_DEBOUNCE_MS: u64 = 2_500; // ardışık tx'leri tek backup'a indirgeyen gecikme
+const PERIODIC_INTERVAL_SECS: u64 = 5 * 60; // 5 dk — idle olsa bile periyodik snapshot
 
 static TX_DIRTY: Lazy<Arc<Notify>> = Lazy::new(|| Arc::new(Notify::new()));
 
@@ -56,14 +60,22 @@ pub async fn write_backup(app: &AppHandle, pool: &SqlitePool) -> Result<PathBuf,
     let json = serde_json::to_string_pretty(&payload)?;
     std::fs::write(&path, json)?;
 
-    prune_old(&dir, KEEP_DAILY)?;
+    prune_old(&dir, KEEP)?;
 
     log::info!("[birik] backup written: {}", path.display());
     Ok(path)
 }
 
+/// Yedek klasörü: <Documents>/Birik/backups/ — uygulama uninstall edilse bile
+/// kullanıcının kendi Documents'ı silinmez. Documents bulunamazsa home_dir
+/// fallback, o da yoksa eski AppData (geriye-dönük).
 fn backup_dir(app: &AppHandle) -> Result<PathBuf, Box<dyn std::error::Error + Send + Sync>> {
-    Ok(app.path().app_config_dir()?.join("backups"))
+    let path_resolver = app.path();
+    let base = path_resolver
+        .document_dir()
+        .or_else(|_| path_resolver.home_dir())
+        .or_else(|_| path_resolver.app_config_dir())?;
+    Ok(base.join("Birik").join("backups"))
 }
 
 fn prune_old(dir: &std::path::Path, keep: usize) -> std::io::Result<()> {
@@ -86,27 +98,50 @@ fn prune_old(dir: &std::path::Path, keep: usize) -> std::io::Result<()> {
     Ok(())
 }
 
-/// Günlük otomatik backup + portföy snapshot. Boot'ta bir kez yazıp sonra
-/// 24 saat aralıklı tick. `auto_backup` false ise yedek yazılmaz ama snapshot
-/// her halükarda yazılır (ETA hesabı için kritik).
-pub fn spawn_daily(app: AppHandle) {
-    tauri::async_runtime::spawn(async move {
-        // Boot'ta hemen yazma — 1 dk sonra ilk yaz, sonra 24h.
-        tokio::time::sleep(Duration::from_secs(60)).await;
+/// Boot'tan hemen sonra (DB ready olunca) çağrıl: kullanıcının veri girmeye
+/// başlamadan ÖNCE elinde bir snapshot olsun. Hata varsa sessizce geç —
+/// boot block'lamasın.
+pub async fn write_immediate_backup(app: &AppHandle) {
+    if !auto_backup_enabled(app).await {
+        return;
+    }
+    let db = app.state::<Db>();
+    match write_backup(app, &db.pool).await {
+        Ok(p) => log::info!("[birik] startup backup: {}", p.display()),
+        Err(e) => log::warn!("[birik] startup backup failed: {e}"),
+    }
+}
 
+/// Portföy snapshot'larını günlük yaz (price history chart için). JSON yedekten
+/// ayrı bir tick — snapshot DB içinde tablo, JSON yedek dış dosya.
+pub fn spawn_daily_snapshots(app: AppHandle) {
+    tauri::async_runtime::spawn(async move {
+        tokio::time::sleep(Duration::from_secs(60)).await;
         loop {
             let db = app.state::<Db>();
-            // Snapshot yazımı (her zaman)
             if let Err(e) = write_portfolio_snapshots(&db.pool).await {
                 log::warn!("[birik] snapshot write failed: {e}");
             }
-            // Backup yazımı (setting'e bağlı)
+            tokio::time::sleep(Duration::from_secs(24 * 60 * 60)).await;
+        }
+    });
+}
+
+/// Periyodik JSON yedek — her PERIODIC_INTERVAL_SECS (5 dk). Tx-bazlı yedek
+/// zaten var ama uzun süre tx olmadan da app açık kalabilir — bu loop o
+/// gap'i kapatır. `auto_backup` setting'i false ise sessiz.
+pub fn spawn_periodic_backup(app: AppHandle) {
+    tauri::async_runtime::spawn(async move {
+        // İlk tick'i kısa tut — boot sonrası birkaç saniye sonra snapshot al
+        tokio::time::sleep(Duration::from_secs(30)).await;
+        loop {
             if auto_backup_enabled(&app).await {
+                let db = app.state::<Db>();
                 if let Err(e) = write_backup(&app, &db.pool).await {
-                    log::warn!("[birik] auto backup failed: {e}");
+                    log::warn!("[birik] periodic backup failed: {e}");
                 }
             }
-            tokio::time::sleep(Duration::from_secs(24 * 60 * 60)).await;
+            tokio::time::sleep(Duration::from_secs(PERIODIC_INTERVAL_SECS)).await;
         }
     });
 }

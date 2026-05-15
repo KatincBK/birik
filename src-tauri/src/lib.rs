@@ -68,12 +68,20 @@ pub fn run() {
             // Alarm background loop (5 dk tick) — PLAN §6.1.F
             services::alarm_loop::spawn(app.handle().clone());
             crash_log("setup: alarm loop spawned");
-            // Günlük otomatik backup — PLAN §12 Faz 7
-            services::backup::spawn_daily(app.handle().clone());
+            // BOOT BACKUP: kullanıcı veri girmeden ÖNCE bir snapshot al.
+            // Documents/Birik/backups/ altına yazılır — uninstaller dokunmaz.
+            let app_for_immediate = app.handle().clone();
+            tauri::async_runtime::spawn(async move {
+                services::backup::write_immediate_backup(&app_for_immediate).await;
+            });
+            // Periyodik backup (5 dk) — idle açık kalsa bile snapshot atar
+            services::backup::spawn_periodic_backup(app.handle().clone());
+            // Portföy snapshot tablosu (24h tick) — price history için, JSON'dan ayrı
+            services::backup::spawn_daily_snapshots(app.handle().clone());
             // Transaction sonrası debounced backup — her veri-değiştirici komut
             // mark_dirty() çağırır, bu writer 2.5s sonra yedek yazar
             services::backup::spawn_tx_writer(app.handle().clone());
-            crash_log("setup: backup loops spawned");
+            crash_log("setup: backup loops spawned (immediate + periodic + daily + tx)");
             // Binance WebSocket — kripto canlı fiyat akışı
             services::binance_ws::spawn(app.handle().clone());
             crash_log("setup: binance ws spawned, setup done");
