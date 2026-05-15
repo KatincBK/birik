@@ -9,6 +9,7 @@ import {
   PinOff,
   Pencil,
   Wallet as WalletIcon,
+  Briefcase,
   PiggyBank,
   Target,
   Bell,
@@ -329,7 +330,8 @@ export function Sidebar() {
       {/* Portföyler — başlık tıklanınca "Hepsi" görünümü açılır */}
       <div className="flex-1 overflow-y-auto px-3 py-2">
         <GroupHeader
-          title={portfolioGroupTitle}
+          title={portfolioGroupTitle.toUpperCase()}
+          icon={<Briefcase className="h-3.5 w-3.5" />}
           onAdd={() => openModal(<CreatePortfolioModal />)}
           onTitleClick={showSingle ? undefined : () => onSelectPortfolio(null)}
           titleActive={
@@ -382,19 +384,17 @@ export function Sidebar() {
                       onContextMenu(e, "budget", b.id, b.name, b.pinned === 1)
                     }
                     className={cn(
-                      "flex w-full items-center justify-between rounded-lg px-3 py-2 text-left text-sm transition-colors duration-150",
+                      "flex w-full items-center gap-2.5 rounded-lg px-3 py-2 text-left text-sm font-semibold uppercase tracking-[0.05em] transition-colors duration-150",
                       active
                         ? "bg-(--color-bg-hover) text-(--color-text-primary)"
                         : "text-(--color-text-secondary) hover:bg-(--color-bg-hover) hover:text-(--color-text-primary)"
                     )}
                   >
-                    <span className="flex items-center gap-1.5 truncate">
-                      {b.pinned === 1 && (
-                        <Pin className="h-3 w-3 text-(--color-accent)" fill="currentColor" />
-                      )}
-                      <WalletIcon className="h-3.5 w-3.5 text-(--color-text-tertiary)" />
-                      <span className="truncate">{b.name}</span>
-                    </span>
+                    <WalletIcon className="h-3.5 w-3.5 text-(--color-text-tertiary)" />
+                    <span className="flex-1 truncate">{b.name}</span>
+                    {b.pinned === 1 && (
+                      <Pin className="h-3 w-3 text-(--color-accent)" fill="currentColor" />
+                    )}
                   </button>
                 </li>
               );
@@ -505,35 +505,42 @@ export function Sidebar() {
 
 function GroupHeader({
   title,
+  icon,
   onAdd,
   onTitleClick,
   titleActive,
 }: {
   title: string;
+  icon: React.ReactNode;
   onAdd: () => void;
   onTitleClick?: () => void;
   titleActive?: boolean;
 }) {
+  // Diğer top-level NavItem'lar (Yatırım, Hedef, Bütçe) ile aynı font, padding,
+  // ikon hizası. Sadece + butonu farklı (yeni eklemek için).
   const titleClass = cn(
-    "text-[12px] font-semibold tracking-[0.05em] uppercase transition-colors",
+    "text-sm font-semibold uppercase tracking-[0.05em] transition-colors",
     titleActive
       ? "text-(--color-text-primary)"
       : "text-(--color-text-secondary)"
   );
   return (
-    <div className="flex items-center justify-between px-2 pb-2">
+    <div
+      className={cn(
+        "flex items-center gap-2.5 rounded-lg px-3 py-2",
+        titleActive && "bg-(--color-bg-hover)"
+      )}
+    >
+      <span className="text-(--color-text-tertiary)">{icon}</span>
       {onTitleClick ? (
         <button
           onClick={onTitleClick}
-          className={cn(
-            titleClass,
-            "rounded px-0.5 hover:text-(--color-text-primary)"
-          )}
+          className={cn(titleClass, "flex-1 text-left hover:text-(--color-text-primary)")}
         >
           {title}
         </button>
       ) : (
-        <span className={titleClass}>{title}</span>
+        <span className={cn(titleClass, "flex-1")}>{title}</span>
       )}
       <button
         onClick={onAdd}
@@ -566,7 +573,7 @@ function NavItem({
         onClick={onClick}
         className={cn(
           "flex w-full items-center gap-2.5 rounded-lg px-3 py-2 text-left text-sm transition-colors duration-150",
-          prominent && "font-semibold tracking-[0.02em]",
+          prominent && "font-semibold uppercase tracking-[0.05em]",
           active
             ? "bg-(--color-bg-hover) text-(--color-text-primary)"
             : "text-(--color-text-secondary) hover:bg-(--color-bg-hover) hover:text-(--color-text-primary)"
