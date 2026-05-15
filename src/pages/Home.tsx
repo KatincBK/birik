@@ -13,8 +13,6 @@ import { openUrl } from "@tauri-apps/plugin-opener";
 import { Skeleton } from "../components/Skeleton";
 import { Hero } from "../components/dashboard/Hero";
 import { AssetIcon } from "../components/AssetIcon";
-import { CreateBudgetModal } from "../components/CreateBudgetModal";
-import { EditTargetModal } from "../components/EditTargetModal";
 import { api, type HomeSummary, type PortfolioStats } from "../lib/api";
 import { usePortfolioStore } from "../stores/portfolioStore";
 import { useBudgetStore } from "../stores/budgetStore";
@@ -66,7 +64,7 @@ export function Home() {
   const goDashboard = useUIStore((s) => s.goDashboard);
   const goInvestments = useUIStore((s) => s.goInvestments);
   const goPassiveIncome = useUIStore((s) => s.goPassiveIncome);
-  const openModal = useUIStore((s) => s.openModal);
+  const goGoal = useUIStore((s) => s.goGoal);
   const displayCurrency = useSettingsStore((s) => s.displayCurrency);
   const valuesHidden = useSettingsStore((s) => s.valuesHidden);
   const activeProfileId = useProfileStore((s) => s.activeId);
@@ -196,13 +194,10 @@ export function Home() {
   const onCardCagr = () => onSelectPortfolio(null);
   const onCardMonthly = () => goInvestments();
   const onCardPassive = () => goPassiveIncome();
-  const onCardTarget = () => {
-    if (activeBudget) {
-      openModal(<EditTargetModal budget={activeBudget} />);
-    } else {
-      openModal(<CreateBudgetModal />);
-    }
-  };
+  // Hedef kartı: tıklayınca Hedef sayfasına git. Hedef tanımlı değilse Goal
+  // sayfasının kendisi "Hedef belirle" CTA gösteriyor — burada bağıl bir karar
+  // vermek yerine yönlendirip oraya devrediyoruz.
+  const onCardTarget = () => goGoal();
 
   const showPie = portfolios.length > 1 && pieData.length > 0;
 
@@ -336,7 +331,7 @@ export function Home() {
                   <li key={p.id}>
                     <button
                       onClick={() => onSelectPortfolio(p.id)}
-                      className="flex w-full items-center justify-between rounded-xl border border-(--color-border-subtle) bg-(--color-bg-panel) px-4 py-3 text-left transition-colors hover:bg-(--color-bg-hover)"
+                      className="group flex w-full items-center justify-between rounded-xl border border-(--color-border-subtle) bg-(--color-bg-panel) px-4 py-3 text-left transition-colors hover:bg-(--color-bg-hover)"
                     >
                       <div className="flex items-center gap-3">
                         <span
@@ -344,7 +339,9 @@ export function Home() {
                           style={{ background: color }}
                         />
                         <div>
-                          <div className="text-sm font-medium">{p.name}</div>
+                          <div className="text-sm font-medium transition-colors group-hover:text-(--color-accent)">
+                            {p.name}
+                          </div>
                           {portfolios.length > 1 && (
                             <div className="text-xs text-(--color-text-tertiary)">
                               %{pct.toFixed(1)} toplam içinde
@@ -353,7 +350,7 @@ export function Home() {
                         </div>
                       </div>
                       <div className="text-right">
-                        <div className="text-base font-semibold tabular">
+                        <div className="text-base font-semibold tabular transition-colors group-hover:text-(--color-accent)">
                           {valuesHidden
                             ? VALUE_MASK
                             : formatCurrency(v, displayCurrency, "summary")}
@@ -555,9 +552,12 @@ function SummaryCard({
       ) : (
         <div
           className={cn(
-            "text-base font-semibold tabular",
+            "text-base font-semibold tabular transition-colors",
             muted && "text-(--color-text-tertiary) text-sm font-medium",
-            valueClass
+            valueClass,
+            // Önemli değerin üzerine hover'da accent maviye dön — sadece kendi
+            // anlamı olan rengi (success/danger) zaten yoksa.
+            !valueClass && !muted && "group-hover:text-(--color-accent)"
           )}
         >
           {value}
