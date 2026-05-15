@@ -205,6 +205,21 @@ export function Investments() {
     "monthly"
   );
 
+  // Signed square root — log10'dan daha hafif sıkıştırma. 0 simetrik.
+  // Bar yüksekliği transform edilmiş space'te, tooltip orijinal değer gösterir.
+  const sqrtTransform = (v: number) => Math.sign(v) * Math.sqrt(Math.abs(v));
+  const sqrtInverse = (t: number) => Math.sign(t) * t * t;
+
+  const monthlySymlog = useMemo(
+    () =>
+      monthlyDisplay.map((m) => ({
+        ym: m.ym,
+        raw: m.value,
+        display: sqrtTransform(m.value),
+      })),
+    [monthlyDisplay]
+  );
+
   // Yıllık bar chart için ay → yıl agregasyonu
   const yearlyDisplay = useMemo(() => {
     const map = new Map<string, number>();
@@ -248,21 +263,6 @@ export function Investments() {
       projection: projMap.get(c.ym) ?? null,
     }));
   }, [cumulativeDisplay, projectionDisplay]);
-
-  // Signed square root — log10'dan daha hafif sıkıştırma. 0 simetrik.
-  // Bar yüksekliği transform edilmiş space'te, tooltip orijinal değer gösterir.
-  const sqrtTransform = (v: number) => Math.sign(v) * Math.sqrt(Math.abs(v));
-  const sqrtInverse = (t: number) => Math.sign(t) * t * t;
-
-  const monthlySymlog = useMemo(
-    () =>
-      monthlyDisplay.map((m) => ({
-        ym: m.ym,
-        raw: m.value,
-        display: sqrtTransform(m.value),
-      })),
-    [monthlyDisplay]
-  );
 
   // Ay başına gruplama — bir ayın tüm currency'leri tek satırda chip olarak
   const groupedByMonth = useMemo(() => {
