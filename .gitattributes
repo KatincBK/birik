@@ -1,0 +1,21 @@
+# SQL migration dosyaları için satır sonları LF olarak zorla — sqlx::migrate!
+# makro SHA-384 checksum'ı dosya içeriğinden hesaplar. Windows CI runner'da
+# CRLF'e dönerse v0.1.3 patladığı gibi, dev (LF) ile prod (CRLF) checksum'ları
+# uyuşmaz ve "migration was previously applied but modified" panic'i çıkar.
+*.sql text eol=lf
+
+# Rust ve config dosyaları da LF — gereksiz line ending fark'ı diff'i kirletmesin
+*.rs text eol=lf
+*.toml text eol=lf
+*.json text eol=lf
+*.yml text eol=lf
+*.yaml text eol=lf
+*.md text eol=lf
+
+# Binary asset'ler — git lf yapmaya çalışmasın
+*.png binary
+*.ico binary
+*.icns binary
+*.jpg binary
+*.jpeg binary
+*.gif binary
