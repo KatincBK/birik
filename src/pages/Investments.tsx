@@ -201,9 +201,7 @@ export function Investments() {
     }));
   }, [monthlyDisplay]);
 
-  const [chartMode, setChartMode] = useState<"monthly" | "yearly" | "cumulative">(
-    "monthly"
-  );
+  const [chartMode, setChartMode] = useState<"monthly" | "cumulative">("monthly");
 
   // Signed square root — log10'dan daha hafif sıkıştırma. 0 simetrik.
   // Bar yüksekliği transform edilmiş space'te, tooltip orijinal değer gösterir.
@@ -219,23 +217,6 @@ export function Investments() {
       })),
     [monthlyDisplay]
   );
-
-  // Yıllık bar chart için ay → yıl agregasyonu
-  const yearlyDisplay = useMemo(() => {
-    const map = new Map<string, number>();
-    for (const m of monthlyDisplay) {
-      const year = m.ym.slice(0, 4);
-      map.set(year, (map.get(year) ?? 0) + m.value);
-    }
-    return [...map.entries()]
-      .sort((a, b) => a[0].localeCompare(b[0]))
-      .map(([year, value]) => ({
-        ym: year,
-        raw: value,
-        display: sqrtTransform(value),
-      }));
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [monthlyDisplay]);
 
   // Toplam modunda sarı çizgi: ortalama yıllık getiriyle (CAGR) simüle edilen
   // portföy. sim[i] = sim[i-1] * (1+monthly_r) + invest[i].
@@ -385,12 +366,10 @@ export function Investments() {
             <h2 className="text-[11px] font-medium tracking-[0.05em] text-(--color-text-secondary) uppercase">
               {chartMode === "monthly"
                 ? `Aylık birikim — log ölçek (${displayCurrency})`
-                : chartMode === "yearly"
-                ? `Yıllık birikim (${displayCurrency})`
                 : `Toplam birikim — kümülatif (${displayCurrency})`}
             </h2>
             <div className="inline-flex gap-0.5 rounded-lg border border-(--color-border-subtle) bg-(--color-bg-panel) p-1">
-              {(["monthly", "yearly", "cumulative"] as const).map((m) => (
+              {(["monthly", "cumulative"] as const).map((m) => (
                 <button
                   key={m}
                   onClick={() => setChartMode(m)}
@@ -401,7 +380,7 @@ export function Investments() {
                       : "border border-transparent text-(--color-text-secondary) hover:text-(--color-text-primary)"
                   )}
                 >
-                  {m === "monthly" ? "Aylık" : m === "yearly" ? "Yıllık" : "Toplam"}
+                  {m === "monthly" ? "Aylık" : "Toplam"}
                 </button>
               ))}
             </div>
@@ -430,56 +409,6 @@ export function Investments() {
                         borderRadius: 8,
                         fontSize: 12,
                       }}
-                      content={({ active, payload }) => {
-                        if (!active || !payload?.length) return null;
-                        const p = payload[0].payload as { ym: string; raw: number };
-                        return (
-                          <div className="rounded-lg border border-(--color-border-subtle) bg-(--color-bg-panel) px-3 py-2 text-xs">
-                            <div className="text-base font-semibold tabular text-(--color-text-primary)">
-                              {formatCurrency(p.raw, displayCurrency, "summary")}
-                            </div>
-                            <div className="mt-0.5 text-[11px] text-(--color-text-tertiary)">
-                              {p.ym}
-                            </div>
-                          </div>
-                        );
-                      }}
-                    />
-                    <Bar
-                      dataKey="display"
-                      shape={(props: any) => {
-                        const negative = (props?.payload?.raw ?? 0) < 0;
-                        const fill = negative ? "#FF8B7A" : "#6FD3EC";
-                        const h = Math.abs(props.height ?? 0);
-                        const y = (props.height ?? 0) < 0 ? props.y + props.height : props.y;
-                        return (
-                          <rect
-                            x={props.x}
-                            y={y}
-                            width={props.width}
-                            height={h}
-                            rx={4}
-                            ry={4}
-                            fill={fill}
-                          />
-                        );
-                      }}
-                    />
-                  </BarChart>
-                ) : chartMode === "yearly" ? (
-                  <BarChart data={yearlyDisplay}>
-                    <CartesianGrid stroke="var(--color-border-subtle)" strokeDasharray="3 3" />
-                    <XAxis dataKey="ym" stroke="var(--color-text-tertiary)" tick={{ fontSize: 12 }} />
-                    <YAxis
-                      stroke="var(--color-text-tertiary)"
-                      tick={{ fontSize: 11 }}
-                      domain={["dataMin", "dataMax"]}
-                      tickFormatter={(t: number) =>
-                        formatCurrency(sqrtInverse(t), displayCurrency, "summary")
-                      }
-                    />
-                    <Tooltip
-                      cursor={{ fill: "rgba(255,255,255,0.04)" }}
                       content={({ active, payload }) => {
                         if (!active || !payload?.length) return null;
                         const p = payload[0].payload as { ym: string; raw: number };
