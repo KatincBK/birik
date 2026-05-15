@@ -1,19 +1,48 @@
 //! Yedekleme servisi — PLAN §12 Faz 7.
 //!
 //! - `write_backup(app, pool)`: AppData/com.birik.app/backups/yyyy-mm-dd-HHMMSS.json
-//! - `prune_old(dir, keep)`: en eski dosyaları sil, son `keep` taneyi tut (default 7)
+//! - `prune_old(dir, keep)`: en eski dosyaları sil, son `keep` taneyi tut
 //! - `spawn_daily(app)`: 24 saatte bir otomatik backup loop'u
+//! - `mark_dirty()` + `spawn_tx_writer(app)`: her transaction sonrası debounced backup
 
 use std::path::PathBuf;
+use std::sync::Arc;
 use std::time::Duration;
 
+use once_cell::sync::Lazy;
 use sqlx::SqlitePool;
 use tauri::{AppHandle, Manager};
+use tokio::sync::Notify;
 
 use crate::commands::backup::build_export_payload;
 use crate::services::Db;
 
-const KEEP_DAILY: usize = 7;
+const KEEP_DAILY: usize = 30; // tx-backup pattern: günlük yedek + tx başı yedek; 30 tane sakla
+const TX_DEBOUNCE_MS: u64 = 2_500; // ardışık tx'leri tek backup'a indirgeyen gecikme
+
+static TX_DIRTY: Lazy<Arc<Notify>> = Lazy::new(|| Arc::new(Notify::new()));
+
+/// Bir veri-değiştirici komut tamamlandığında çağır — sessiz, ucuz, eşzamansız.
+/// Notify::notify_one() buffer'lı: ardışık 100 çağrı tek wakeup'a düşer.
+pub fn mark_dirty() {
+    TX_DIRTY.notify_one();
+}
+
+/// Boot'ta bir kez spawn et. mark_dirty() çağrısı geldiğinde TX_DEBOUNCE_MS
+/// kadar bekler, sonra yedek yazar. Yedek yazılırken gelen çağrılar bir sonraki
+/// turda işlenir.
+pub fn spawn_tx_writer(app: AppHandle) {
+    tauri::async_runtime::spawn(async move {
+        loop {
+            TX_DIRTY.notified().await;
+            tokio::time::sleep(Duration::from_millis(TX_DEBOUNCE_MS)).await;
+            let db = app.state::<Db>();
+            if let Err(e) = write_backup(&app, &db.pool).await {
+                log::warn!("[birik] tx backup failed: {e}");
+            }
+        }
+    });
+}
 
 pub async fn write_backup(app: &AppHandle, pool: &SqlitePool) -> Result<PathBuf, Box<dyn std::error::Error + Send + Sync>> {
     let dir = backup_dir(app)?;

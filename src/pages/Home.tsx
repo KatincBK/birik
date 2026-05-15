@@ -12,6 +12,7 @@ import {
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { Skeleton } from "../components/Skeleton";
 import { Hero } from "../components/dashboard/Hero";
+import birikLogo from "../assets/birik_logo.png";
 import { AssetIcon } from "../components/AssetIcon";
 import { CreateBudgetModal } from "../components/CreateBudgetModal";
 import { EditTargetModal } from "../components/EditTargetModal";
@@ -208,6 +209,19 @@ export function Home() {
 
   return (
     <div className="mx-auto max-w-6xl space-y-8 px-6 py-10">
+      {/* Brand banner — logo + BIRIK yazısı */}
+      <div className="flex items-center gap-5">
+        <img
+          src={birikLogo}
+          alt="Birik"
+          className="h-16 w-16 select-none"
+          draggable={false}
+        />
+        <h1 className="text-5xl font-bold tracking-tight text-(--color-text-primary)">
+          BIRIK
+        </h1>
+      </div>
+
       {/* Hero — büyütülmüş */}
       <header className="flex flex-col gap-2">
         <Hero

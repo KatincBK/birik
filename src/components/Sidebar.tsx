@@ -1,7 +1,6 @@
 import { useEffect, useState } from "react";
 import { getVersion } from "@tauri-apps/api/app";
 import {
-  Wallet,
   Settings,
   HelpCircle,
   LayoutDashboard,
@@ -229,24 +228,33 @@ export function Sidebar() {
 
   return (
     <aside className="flex h-full w-60 shrink-0 flex-col border-r border-(--color-border-subtle) bg-(--color-bg-panel)">
-      {/* Logo + profil seçici */}
-      <div className="relative flex h-14 items-center gap-2 px-3">
-        <div className="grid h-7 w-7 place-items-center rounded-lg bg-(--color-accent)/15 text-(--color-accent)">
-          <Wallet className="h-4 w-4" strokeWidth={2.5} />
+      {/* Anasayfa — sidebar'ın en prominent giriş noktası */}
+      <button
+        onClick={goHome}
+        className={cn(
+          "flex h-14 w-full items-center gap-2.5 border-b border-(--color-border-subtle) px-3 text-left transition-colors",
+          view.kind === "home"
+            ? "bg-(--color-bg-hover) text-(--color-text-primary)"
+            : "text-(--color-text-primary) hover:bg-(--color-bg-hover)"
+        )}
+      >
+        <div className="grid h-8 w-8 place-items-center rounded-lg bg-(--color-accent)/15 text-(--color-accent)">
+          <Home className="h-4 w-4" strokeWidth={2.5} />
         </div>
+        <span className="text-sm font-semibold tracking-tight">Anasayfa</span>
+      </button>
+
+      {/* Profil seçici — kompakt chip */}
+      <div className="relative px-3 pt-2.5">
         <button
           onClick={() => setProfileMenuOpen((v) => !v)}
-          className="flex flex-1 items-center justify-between gap-1 rounded-md px-2 py-1.5 text-left transition-colors hover:bg-(--color-bg-hover)"
+          className="flex w-full items-center gap-1.5 rounded-md px-2 py-1 text-left transition-colors hover:bg-(--color-bg-hover)"
         >
-          <div className="min-w-0">
-            <div className="truncate text-sm font-semibold tracking-tight">
-              {activeProfile?.name ?? "Birik"}
-            </div>
-            <div className="text-[10px] text-(--color-text-tertiary)">
-              {profiles.length > 1 ? `${profiles.length} profil` : "profil"}
-            </div>
-          </div>
-          <ChevronDown className="h-4 w-4 text-(--color-text-tertiary)" />
+          <User className="h-3 w-3 text-(--color-text-tertiary)" />
+          <span className="flex-1 truncate text-xs text-(--color-text-secondary)">
+            {activeProfile?.name ?? "Profil"}
+          </span>
+          <ChevronDown className="h-3 w-3 text-(--color-text-tertiary)" />
         </button>
 
         {profileMenuOpen && (
@@ -255,7 +263,7 @@ export function Sidebar() {
               className="fixed inset-0 z-40"
               onClick={() => setProfileMenuOpen(false)}
             />
-            <div className="absolute left-3 right-3 top-12 z-50 overflow-hidden rounded-lg border border-(--color-border-subtle) bg-(--color-bg-panel) py-1 text-sm shadow-2xl shadow-black/50">
+            <div className="absolute left-3 right-3 top-9 z-50 overflow-hidden rounded-lg border border-(--color-border-subtle) bg-(--color-bg-panel) py-1 text-sm shadow-2xl shadow-black/50">
               {profiles.map((p) => (
                 <button
                   key={p.id}
@@ -313,16 +321,6 @@ export function Sidebar() {
             </div>
           </>
         )}
-      </div>
-
-      {/* Anasayfa (en üstte, tüm gruplardan önce) */}
-      <div className="px-3 pt-1">
-        <NavItem
-          label="Anasayfa"
-          icon={<Home className="h-3.5 w-3.5" />}
-          active={view.kind === "home"}
-          onClick={goHome}
-        />
       </div>
 
       {/* Portföyler */}

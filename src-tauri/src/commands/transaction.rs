@@ -150,6 +150,7 @@ pub async fn create_transaction(
     }
 
     tx.commit().await?;
+    crate::services::backup::mark_dirty();
     Ok(row)
 }
 
@@ -242,6 +243,7 @@ pub async fn soft_delete_transaction(db: State<'_, Db>, id: i64) -> AppResult<()
             "İşlem bulunamadı: id={id}"
         )));
     }
+    crate::services::backup::mark_dirty();
     Ok(())
 }
 
@@ -256,6 +258,7 @@ pub async fn hard_delete_transaction(db: State<'_, Db>, id: i64) -> AppResult<()
             "İşlem bulunamadı: id={id}"
         )));
     }
+    crate::services::backup::mark_dirty();
     Ok(())
 }
 
@@ -347,6 +350,7 @@ pub async fn update_transaction(
     }
 
     tx.commit().await?;
+    crate::services::backup::mark_dirty();
     Ok(updated)
 }
 
@@ -375,6 +379,7 @@ pub async fn restore_transaction(db: State<'_, Db>, id: i64) -> AppResult<()> {
             "İşlem bulunamadı: id={id}"
         )));
     }
+    crate::services::backup::mark_dirty();
     Ok(())
 }
 
@@ -663,6 +668,7 @@ pub async fn create_swap_transaction(
     }
 
     tx.commit().await?;
+    crate::services::backup::mark_dirty();
 
     Ok(SwapResult {
         sell_count: sell_legs.len(),
@@ -794,6 +800,7 @@ pub async fn move_asset_to_portfolio(
                 .await?;
         }
         tx.commit().await?;
+        crate::services::backup::mark_dirty();
         return Ok(MoveResult {
             mode,
             full_transfer: true,
@@ -897,6 +904,7 @@ pub async fn move_asset_to_portfolio(
     .await?;
 
     tx.commit().await?;
+    crate::services::backup::mark_dirty();
 
     Ok(MoveResult {
         mode,

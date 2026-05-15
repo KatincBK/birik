@@ -64,7 +64,10 @@ pub fn run() {
             crash_log("setup: alarm loop spawned");
             // Günlük otomatik backup — PLAN §12 Faz 7
             services::backup::spawn_daily(app.handle().clone());
-            crash_log("setup: backup loop spawned");
+            // Transaction sonrası debounced backup — her veri-değiştirici komut
+            // mark_dirty() çağırır, bu writer 2.5s sonra yedek yazar
+            services::backup::spawn_tx_writer(app.handle().clone());
+            crash_log("setup: backup loops spawned");
             // Binance WebSocket — kripto canlı fiyat akışı
             services::binance_ws::spawn(app.handle().clone());
             crash_log("setup: binance ws spawned, setup done");
