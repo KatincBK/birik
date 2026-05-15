@@ -95,7 +95,6 @@ async fn run_session(app: &AppHandle) -> Result<(), Box<dyn std::error::Error + 
         .join("/");
     let url = format!("wss://stream.binance.com:9443/stream?streams={streams}");
     log::info!("[birik] binance ws connecting: {} streams", sym_to_id.len());
-    eprintln!("[birik] binance ws → {} streams", sym_to_id.len());
 
     let (ws, _resp) = connect_async(&url).await?;
     let (mut write, mut read) = ws.split();

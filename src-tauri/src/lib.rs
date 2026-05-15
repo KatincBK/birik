@@ -40,6 +40,12 @@ pub fn run() {
     }));
     crash_log(&format!("=== App starting v{} ===", env!("CARGO_PKG_VERSION")));
 
+    // rustls 0.23: process-level crypto provider explicit set. Set edilmezse
+    // ilk TLS handshake'te panic ("Could not automatically determine the
+    // process-level CryptoProvider"). Binance WS + reqwest hepsi bunu kullanır.
+    let _ = rustls::crypto::ring::default_provider().install_default();
+    crash_log("rustls: ring crypto provider installed");
+
     let mut builder = tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
         // plugin-sql migration listesi olmadan kuruluyor — migration'ları

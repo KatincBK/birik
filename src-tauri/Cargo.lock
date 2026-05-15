@@ -316,6 +316,7 @@ dependencies = [
  "once_cell",
  "quick-xml 0.36.2",
  "reqwest",
+ "rustls",
  "serde",
  "serde_json",
  "sqlx",
