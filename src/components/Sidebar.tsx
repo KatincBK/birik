@@ -516,37 +516,39 @@ function GroupHeader({
   onTitleClick?: () => void;
   titleActive?: boolean;
 }) {
-  // Diğer top-level NavItem'lar (Yatırım, Hedef, Bütçe) ile aynı font, padding,
-  // ikon hizası. Sadece + butonu farklı (yeni eklemek için).
-  const titleClass = cn(
+  // NavItem ile aynı görünüm + tıklama alanı: ikon ve metin tek button içinde,
+  // tüm satır soldan tıklanabilir. + butonu sağda ayrı (overlay konumlu, satır
+  // içinde yer kaplıyor ama button içine girmiyor).
+  const labelClass = cn(
     "text-sm font-semibold uppercase tracking-[0.05em] transition-colors",
     titleActive
       ? "text-(--color-text-primary)"
       : "text-(--color-text-secondary)"
   );
   return (
-    <div
-      className={cn(
-        "flex items-center gap-2.5 rounded-lg px-3 py-2",
-        titleActive && "bg-(--color-bg-hover)"
-      )}
-    >
-      <span className="text-(--color-text-tertiary)">{icon}</span>
+    <div className="relative flex items-stretch">
       {onTitleClick ? (
         <button
           onClick={onTitleClick}
-          className={cn(titleClass, "flex-1 text-left hover:text-(--color-text-primary)")}
+          className={cn(
+            "flex flex-1 items-center gap-2.5 rounded-lg px-3 py-2 pr-9 text-left transition-colors duration-150 hover:bg-(--color-bg-hover) hover:text-(--color-text-primary)",
+            titleActive && "bg-(--color-bg-hover)"
+          )}
         >
-          {title}
+          <span className="text-(--color-text-tertiary)">{icon}</span>
+          <span className={labelClass}>{title}</span>
         </button>
       ) : (
-        <span className={cn(titleClass, "flex-1")}>{title}</span>
+        <div className="flex flex-1 items-center gap-2.5 px-3 py-2 pr-9">
+          <span className="text-(--color-text-tertiary)">{icon}</span>
+          <span className={labelClass}>{title}</span>
+        </div>
       )}
       <button
         onClick={onAdd}
         aria-label={`Yeni ${title.toLowerCase()}`}
         title={`Yeni ${title.toLowerCase()}`}
-        className="grid h-5 w-5 place-items-center rounded-md text-(--color-text-tertiary) transition-colors hover:bg-(--color-bg-hover) hover:text-(--color-text-primary)"
+        className="absolute right-2 top-1/2 grid h-5 w-5 -translate-y-1/2 place-items-center rounded-md text-(--color-text-tertiary) transition-colors hover:bg-(--color-bg-hover) hover:text-(--color-text-primary)"
       >
         <Plus className="h-3.5 w-3.5" strokeWidth={2.5} />
       </button>
