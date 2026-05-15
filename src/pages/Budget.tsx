@@ -194,14 +194,29 @@ export function Budget({ budgetId }: { budgetId: number }) {
 
   const chartData = useMemo(() => {
     if (!plan) return [];
-    return plan.map((m) => ({
-      ym: m.year_month,
-      label: ymToLabel(m.year_month),
-      income: m.income_display,
-      expense: -m.expense_display, // negatif olarak göster — bar aşağıya
-      net: m.net_display,
-      is_interpolated: m.is_interpolated,
-    }));
+    return plan.map((m) => {
+      const income = m.income_display;
+      const expense = m.expense_display;
+      const net = m.net_display;
+      // Stacked bar parçaları:
+      //  - coveredExpense: gelirin gider tarafından "yenen" kısmı (kırmızı, alt)
+      //  - surplus: net pozitif ise üste binen yeşil
+      //  - deficit: net negatif ise sıfırın altına inen kırmızı
+      const coveredExpense = Math.min(income, expense);
+      const surplus = Math.max(0, income - expense);
+      const deficit = net < 0 ? net : 0;
+      return {
+        ym: m.year_month,
+        label: ymToLabel(m.year_month),
+        income,
+        expense,
+        net,
+        coveredExpense,
+        surplus,
+        deficit,
+        is_interpolated: m.is_interpolated,
+      };
+    });
   }, [plan]);
 
   return (
@@ -246,15 +261,15 @@ export function Budget({ budgetId }: { budgetId: number }) {
           </h3>
           <div className="flex items-center gap-3 text-[11px] text-(--color-text-tertiary)">
             <span className="inline-flex items-center gap-1.5">
-              <span className="h-2 w-2 rounded-full bg-(--color-success)" />
-              Gelir
+              <span className="h-2 w-2 rounded-sm bg-(--color-success)" />
+              Birikim
             </span>
             <span className="inline-flex items-center gap-1.5">
-              <span className="h-2 w-2 rounded-full bg-(--color-danger)" />
+              <span className="h-2 w-2 rounded-sm bg-(--color-danger)" />
               Gider
             </span>
             <span className="inline-flex items-center gap-1.5">
-              <span className="h-2 w-2 rounded-full bg-(--color-text-tertiary)" />
+              <span className="h-2 w-2 rounded-sm bg-(--color-text-tertiary)/60" />
               Interpole
             </span>
           </div>
@@ -298,6 +313,8 @@ export function Budget({ budgetId }: { budgetId: number }) {
                       net: number;
                       is_interpolated: boolean;
                     };
+                    const savingsRate =
+                      p.income > 0 ? (p.net / p.income) * 100 : null;
                     return (
                       <div className="rounded-lg border border-(--color-border-subtle) bg-(--color-bg-panel) px-3 py-2 text-xs shadow-lg space-y-0.5">
                         <div className="font-semibold text-(--color-text-primary)">
@@ -308,37 +325,58 @@ export function Budget({ budgetId }: { budgetId: number }) {
                             </span>
                           )}
                         </div>
-                        <div className="text-(--color-success)">
+                        <div className="text-(--color-text-secondary)">
                           Gelir: {formatCurrency(p.income, displayCurrency, "summary")}
                         </div>
                         <div className="text-(--color-danger)">
-                          Gider: {formatCurrency(Math.abs(p.expense), displayCurrency, "summary")}
+                          Gider: {formatCurrency(p.expense, displayCurrency, "summary")}
                         </div>
                         <div
                           className={cn(
-                            "border-t border-(--color-border-subtle) pt-1 mt-1 font-medium tabular",
+                            "border-t border-(--color-border-subtle) pt-1 mt-1 font-medium tabular flex items-center justify-between gap-3",
                             p.net >= 0 ? "text-(--color-success)" : "text-(--color-danger)"
                           )}
                         >
-                          Net: {formatCurrency(p.net, displayCurrency, "summary")}
+                          <span>
+                            {p.net >= 0 ? "Birikim" : "Açık"}:{" "}
+                            {formatCurrency(p.net, displayCurrency, "summary")}
+                          </span>
+                          {savingsRate != null && (
+                            <span className="text-[10px] opacity-80">
+                              {savingsRate >= 0 ? "+" : ""}
+                              {savingsRate.toFixed(0)}%
+                            </span>
+                          )}
                         </div>
                       </div>
                     );
                   }}
                 />
-                <Bar dataKey="income" radius={[4, 4, 0, 0]}>
-                  {chartData.map((d, i) => (
-                    <Cell
-                      key={`inc-${i}`}
-                      fill={d.is_interpolated ? "#6B6B75" : "#10B981"}
-                    />
-                  ))}
-                </Bar>
-                <Bar dataKey="expense" radius={[0, 0, 4, 4]}>
+                {/* Stacked: kırmızı gider altta, üstüne yeşil birikim biner. Net eksiye düşerse 0'ın altına kırmızı deficit iner. */}
+                <Bar dataKey="coveredExpense" stackId="budget" isAnimationActive={false}>
                   {chartData.map((d, i) => (
                     <Cell
                       key={`exp-${i}`}
                       fill={d.is_interpolated ? "#6B6B75" : "#DC2626"}
+                      fillOpacity={d.is_interpolated ? 0.55 : 0.9}
+                    />
+                  ))}
+                </Bar>
+                <Bar dataKey="surplus" stackId="budget" radius={[4, 4, 0, 0]} isAnimationActive={false}>
+                  {chartData.map((d, i) => (
+                    <Cell
+                      key={`sur-${i}`}
+                      fill={d.is_interpolated ? "#9CA3AF" : "#10B981"}
+                      fillOpacity={d.is_interpolated ? 0.55 : 1}
+                    />
+                  ))}
+                </Bar>
+                <Bar dataKey="deficit" stackId="budget" radius={[0, 0, 4, 4]} isAnimationActive={false}>
+                  {chartData.map((d, i) => (
+                    <Cell
+                      key={`def-${i}`}
+                      fill={d.is_interpolated ? "#6B6B75" : "#DC2626"}
+                      fillOpacity={d.is_interpolated ? 0.55 : 0.9}
                     />
                   ))}
                 </Bar>
