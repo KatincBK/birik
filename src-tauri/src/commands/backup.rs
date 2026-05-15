@@ -92,10 +92,11 @@ pub async fn build_export_payload(pool: &SqlitePool) -> AppResult<ExportPayload>
         sqlx::query_as("SELECT transaction_id, tag FROM transaction_tags")
             .fetch_all(pool)
             .await?;
-    let price_cache: Vec<PriceCache> =
-        sqlx::query_as("SELECT asset_id, price, currency, fetched_at FROM price_cache")
-            .fetch_all(pool)
-            .await?;
+    let price_cache: Vec<PriceCache> = sqlx::query_as(
+        "SELECT asset_id, price, currency, fetched_at, change_24h_pct FROM price_cache",
+    )
+    .fetch_all(pool)
+    .await?;
     let price_alerts: Vec<PriceAlert> = sqlx::query_as(
         "SELECT id, asset_id, condition, threshold, currency, active, triggered_at, created_at
          FROM price_alerts",
