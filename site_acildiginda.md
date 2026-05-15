@@ -1,236 +1,222 @@
 # Site açıldığında — Birik Auto-Update Sistem Planı
 
-> Bu doküman, Birik uygulamasını **kendi sitemizden satılabilir + güncellenebilir** bir ürüne dönüştürmek için yapılacakların kayıt defteridir.
-> Bugün açık kaynaklı çalışıyoruz (site yok). İleride kapalı kaynak ticari bir ürün olacak.
-> Bu geçişte hiçbir şeyin bozulmaması için aşağıdaki kararların **bugün doğru kurulmuş olması** lazım.
+> Bu doküman, Birik uygulamasının **auto-update sistemi**ni ve ileride **portföy sitesi** açıldığında dağıtımın oraya nasıl taşınacağını kayıt altına alır.
+> Bugün **GitHub Releases üzerinden ücretsiz** dağıtım yapıyoruz. İleride kendi sitemiz açılınca dağıtımı oraya genişleteceğiz, ama GitHub her zaman geri-uyumluluk için ayakta kalacak.
 
 ---
 
 ## TL;DR — 1 paragrafta hikaye
 
-Tauri uygulaması, açılışta sabit bir URL'e (`updates.birik.app/latest.json` gibi) bakar. O URL'deki JSON dosyasında "en son versiyon şu, indirme linki bu, imzası bu" yazar. Yeni versiyon varsa app indirir, imzayı doğrular, kurar. **Bu URL her installer'a hard-code edildiği için bugün koyacağımız URL'i ömür boyu kullanmak zorundayız** — bu yüzden bugün GitHub'a değil, kendi domain'imize işaret eden bir URL koyacağız. Site açıldığında sadece o URL'in arkasındaki host'u değiştireceğiz, kullanıcılar farkına bile varmadan güncellenmeye devam edecek.
+Tauri uygulaması, açılışta `tauri.conf.json`'da yazılı bir URL'e bakar. Şu an bu URL **`https://github.com/KatincBK/birik/releases/latest/download/latest.json`**. Yeni bir release çıkardığımızda GitHub bu URL'i otomatik en son sürüme yönlendirir, app yeni sürümü görür, imzayı doğrular, kurar. Portföy sitesi açıldığında `tauri.conf.json` içindeki `endpoints` dizisine **siteyi başa koyacağız**, GitHub Releases ikinci sırada fallback olarak kalacak — yani eski installer'lar da yeni installer'lar da çalışmaya devam edecek.
 
 ---
 
-## Sistemin tam akışı (basit anlatım)
+## Sistemin tam akışı
 
 ```
 [Birik kullanıcısının bilgisayarı]
        │
        │  açılışta GET
        ▼
-https://updates.birik.app/latest.json
+https://github.com/KatincBK/birik/releases/latest/download/latest.json
        │
+       │  GitHub otomatik redirect → en son release'in latest.json'u
        │  döner:
        │  { version: "0.3.0",
-       │    url: ".../Birik_0.3.0_x64.msi",
+       │    url: ".../Birik_0.3.0_x64-setup.exe",
        │    signature: "abc123..." }
        │
        ▼
 App diyor ki: "Ben 0.2.0'ım, bunda 0.3.0 yazıyor → güncelleme var"
        │
        ▼
-.msi'yi indirir → embed edilmiş public key ile .sig'i doğrular
+.exe'yi indirir → embed edilmiş public key ile imzayı doğrular
        │
        ▼  imza geçerli mi?
        │
    ✓ Evet  ─► sessizce kurar, uygulamayı yeniden başlatır
-   ✗ Hayır ─► işlemi iptal eder (saldırı / bozuk dosya olabilir)
+   ✗ Hayır ─► işlemi iptal eder (sahte dosya saldırısına karşı koruma)
 ```
 
-**Kritik nokta:** İmza doğrulaması, app'in içine gömülmüş **public key** ile yapılır. Yani biri bizim sitemizi hack'leyip sahte `.msi` koysa bile, o `.msi`'yi bizim **private key** olmadan imzalayamayacağı için kullanıcılar zararlı dosyayı yüklemez. Public key zararsız bir şekilde gömülür, **private key bize ait gizli anahtardır**.
+**Kritik kavram:** App'in içine gömülmüş **public key** ile her .exe'nin imzası doğrulanır. Biri GitHub release'i ele geçirse bile, bizim **private key**'imiz olmadan geçerli imza üretemez → kullanıcılar zararlı bir build kuramaz.
 
 ---
 
 ## Şu anki durum (snapshot — 2026-05-15)
 
-✅ Var olanlar:
-- `tauri-plugin-updater` Cargo'da yüklü (`src-tauri/Cargo.toml`)
-- `@tauri-apps/plugin-updater` npm'de yüklü (`package.json`)
-- `lib.rs:40`'ta plugin mount edilmiş
-- `capabilities/default.json:10`'da `updater:default` izni verilmiş
-- `tauri.conf.json:42-51`'de updater config skeleton var
+✅ Tamamlanmış:
+- `tauri-plugin-updater` Cargo + npm'de yüklü
+- `lib.rs:40` plugin mount edildi
+- `capabilities/default.json` updater izni verildi
+- **Signing keypair üretildi** (private key kullanıcının 1Password / USB yedeğinde, public key config'de)
+- `tauri.conf.json`:
+  - `active: true` ✓
+  - `pubkey` doldu ✓
+  - `endpoints` GitHub Releases URL'ine bakıyor ✓
+  - `windows.installMode: "passive"` (kullanıcı görür, otomatik kurar, restart eder)
+- Frontend tetikleyici: `src/hooks/useUpdateChecker.ts` + `App.tsx`'te mount edildi
+  - Sessiz boot kontrolü, sonner toast ile "İndir ve kur" butonu, indirme yüzdesi
 
-❌ Yapılması gerekenler:
-- `tauri.conf.json`'da `"active": false` → `true`
-- `endpoints` placeholder URL'i → **gerçek kendi domain URL'imizle değiştir**
-- `pubkey` placeholder → **gerçek public key'le değiştir**
-- Signing keypair üret
-- Domain al + DNS ayarla
-- Free hosting kur (Cloudflare Pages / R2)
-- Frontend'e "güncelleme var" tetikleyici ekle (toast + buton)
-- Build + upload script'i yaz
+❌ Henüz yapılmamış:
+- İlk gerçek release (`v0.1.0`'ı GitHub'a push etmek + `latest.json` üretmek)
+- Release çıkarma akışını otomatize etmek (GitHub Actions veya local script)
+- Manuel "Güncellemeleri kontrol et" butonu Settings'te (boot dışında manuel tetik)
 
 ---
 
-## Faz 1 — BUGÜN yapılacaklar (site yokken bile)
+## Faz 1 — İLK RELEASE'İ NASIL ÇIKARACAĞIZ
 
-Sıra kritiktir — özellikle domain'i baştan doğru seçmek lazım, sonradan değiştirmek **eski kullanıcıların update almasını imkânsız hale getirir**.
+İki seçenek var: ya GitHub Actions kurarız (1 sefer iş, sonra `git tag` ile otomatik), ya local script yazarız (her sefer manuel ama bağımlılıksız). **GitHub Actions önerilen.**
 
-### 1. Domain seç
+### Seçenek A — GitHub Actions (önerilen, tek seferlik kurulum)
 
-Bu, ileride dönüşü olmayan tek karardır.
+Repo Settings → Secrets and variables → Actions altına şunları ekle:
+- `TAURI_SIGNING_PRIVATE_KEY` → `birik-updater.key` dosyasının **içeriği**
+- `TAURI_SIGNING_PRIVATE_KEY_PASSWORD` → key generate sırasında verilen parola
 
-- Tavsiye: ürün adıyla aynı bir domain (örn. `birik.app`, `birikapp.com`, `birik.io`)
-- Updater için **subdomain** ayır: `updates.birik.app` (cool görünür + ileride API'ler için root domain serbest kalır)
-- Cloudflare / Namecheap / Porkbun'dan ~$10-15/yıl
+Sonra `.github/workflows/release.yml` (henüz yok, faz 1 todo'da):
 
-### 2. Signing keypair üret
-
-```bash
-npx @tauri-apps/cli signer generate -w ~/.tauri/birik-updater.key
+```yaml
+name: Release
+on:
+  push:
+    tags:
+      - "v*"
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: 20 }
+      - uses: dtolnay/rust-toolchain@stable
+      - run: npm ci
+      - uses: tauri-apps/tauri-action@v0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+        with:
+          tagName: ${{ github.ref_name }}
+          releaseName: "Birik ${{ github.ref_name }}"
+          releaseBody: "Yenilikler için commit log'a bak."
+          releaseDraft: false
+          prerelease: false
+          includeUpdaterJson: true
 ```
 
-Bu komut iki dosya üretir:
-- **private key** (`~/.tauri/birik-updater.key`) — gizli, asla repo'ya commit etme
-- **public key** (terminale yazılır) — `tauri.conf.json:47`'deki `pubkey` alanına yapıştır
+Akış: `git tag v0.2.0 && git push --tags` → workflow tetiklenir → build alır → imzalar → release yayınlar → `latest.json` otomatik üretilir.
 
-**Bu private key kaybolursa eski kullanıcılar bir daha update alamaz.** Çift yedek şart:
-- 1Password / Bitwarden gibi şifre yöneticisi
-- USB stick + offline kasa
-- Parolası ayrı yerde saklanacak
+### Seçenek B — Lokal manuel release
 
-### 3. Ücretsiz hosting kur (geçici)
-
-İki seçenek, ikisi de ücretsiz:
-
-**Cloudflare R2 + Pages** (önerilen — geleceğe daha uyumlu):
-- R2 bucket'a `.msi` ve `latest.json` koy
-- Custom domain bağla: `updates.birik.app` → R2 bucket
-- Egress ücretsiz (S3'ten farklı olarak)
-
-**GitHub Releases + Cloudflare proxy** (alternatif — daha hızlı kurulur):
-- Build'leri GitHub release'lerine at
-- `latest.json` Cloudflare Worker'la dinamik üret veya statik dosya olarak Pages'a at
-- Custom domain Cloudflare Pages'e bağla
-
-> **Neden direkt GitHub Releases URL'i değil?** Çünkü endpoint URL'i hard-code. Yarın repo'yu private yapacaksak veya başka yere taşıyacaksak `github.com/...` URL'leri çalışmayacak. Custom domain bizi her zaman kurtarır.
-
-### 4. Endpoint URL'i ve pubkey'i config'e koy
-
-`src-tauri/tauri.conf.json`:
-```json
-"updater": {
-  "active": true,
-  "endpoints": [
-    "https://updates.birik.app/latest.json"
-  ],
-  "pubkey": "<step 2'den çıkan public key>",
-  "windows": {
-    "installMode": "passive"
-  }
-}
-```
-
-### 5. Frontend tetikleyici
-
-App açılışta updater'ı çağıran kod gerekli. Yaklaşık şekli:
-
-```ts
-import { check } from "@tauri-apps/plugin-updater";
-
-// App.tsx mount sırasında veya manuel "güncelleme kontrol et" butonunda
-const update = await check();
-if (update) {
-  // toast.info("Yeni versiyon var: " + update.version)
-  // kullanıcı "indir" derse:
-  await update.downloadAndInstall();
-}
-```
-
-### 6. Release çıkarma akışı (manuel script)
-
-İlk MVP'de CI yok, lokal yapacağız:
-
-1. `package.json` ve `src-tauri/tauri.conf.json` ve `Cargo.toml`'da version'u artır (örn. 0.1.0 → 0.2.0)
-2. `npm run tauri build` → `.msi` + `.sig` üretir (`src-tauri/target/release/bundle/msi/`)
-3. `latest.json` dosyasını manuel hazırla:
-   ```json
-   {
-     "version": "0.2.0",
-     "notes": "Bu sürümde neler değişti...",
-     "pub_date": "2026-06-01T12:00:00Z",
-     "platforms": {
-       "windows-x86_64": {
-         "signature": "<.sig dosyasının içeriği>",
-         "url": "https://updates.birik.app/Birik_0.2.0_x64.msi"
+1. `package.json`, `src-tauri/tauri.conf.json`, `src-tauri/Cargo.toml`'da versiyonu artır (üçü aynı)
+2. Build al:
+   ```bash
+   npm run tauri build
+   ```
+3. Çıktılar: `src-tauri/target/release/bundle/nsis/Birik_0.2.0_x64-setup.exe` + `.exe.sig`
+4. GitHub web UI'da yeni release oluştur:
+   - Tag: `v0.2.0`
+   - Asset olarak `.exe` + `.exe.sig`'i yükle
+   - Asset olarak şu içerikte `latest.json`'u yükle:
+     ```json
+     {
+       "version": "0.2.0",
+       "notes": "Yenilikler...",
+       "pub_date": "2026-06-01T12:00:00Z",
+       "platforms": {
+         "windows-x86_64": {
+           "signature": "<.exe.sig dosyasının tüm içeriği>",
+           "url": "https://github.com/KatincBK/birik/releases/download/v0.2.0/Birik_0.2.0_x64-setup.exe"
+         }
        }
      }
-   }
-   ```
-4. `.msi` ve `latest.json`'u R2 bucket'a upload et (rclone / wrangler CLI ile)
-5. Test: eski versiyonu çalıştır, "güncelleme var" görmeli
+     ```
 
-İleride bu adımları `just release 0.2.0` gibi tek komutla otomatikleştirebiliriz.
+> Seçenek A'yı tercih ediyorsak ilk denemeyi B ile yapmak isteyebiliriz — manuel olarak süreci öğrenince Actions'a geçmek kolay olur.
 
 ---
 
-## Faz 2 — SİTE AÇILDIĞINDA yapılacaklar
+## Faz 2 — PORTFÖY SİTESİ AÇILDIĞINDA yapılacaklar
 
-Bu kısım için bu dokümanı yazıyoruz — açıldığında bu listeyi takip edeceğiz.
+Site açıldığında, dağıtımı oraya genişleteceğiz. Eski kullanıcıların GitHub bağı kopmadan.
 
-### A. Hosting'i siteye taşı (kullanıcılar fark etmeyecek)
+### A. Site tarafına `latest.json` ve installer'ı koy
 
-DNS'i değiştirmek yeter:
-- `updates.birik.app` artık kendi sunucumuza / yeni CDN'imize yönlensin
-- `latest.json` ve `.msi` dosyaları yeni host'a kopyalansın
-- Eski R2 / Pages bucket'ı kapatılabilir
+Portföy site'inde `birik/updates/` gibi bir alt-path (veya subdomain) ayır:
+```
+https://benim-site.com/birik/updates/latest.json
+https://benim-site.com/birik/updates/Birik_0.5.0_x64-setup.exe
+```
 
-**Endpoint URL'i (`updates.birik.app/latest.json`) değişmediği için tüm kurulu kullanıcılar sorunsuz update almaya devam eder.** Faz 1'de domain'i baştan doğru seçmenin tüm değeri burada ödüllendiriliyor.
+İlk başta sadece bu dosyalar lazım, backend gerekmez.
 
-### B. Repo'yu private yap (kapalı kaynağa geçiş)
+### B. `tauri.conf.json`'da endpoint'i çoğalt
 
-- GitHub repo Settings → Visibility → Private
-- Mevcut user'lara etkisi yok (kullandıkları .msi binary)
-- Geliştirme akışı değişmez
+```json
+"endpoints": [
+  "https://benim-site.com/birik/updates/latest.json",
+  "https://github.com/KatincBK/birik/releases/latest/download/latest.json"
+]
+```
 
-### C. Ödeme + lisans sistemi (updater'dan TAMAMEN AYRI bir konu)
+Updater önce siteyi dener, oradan cevap alamazsa GitHub'a düşer. Yani:
+- Yeni installer'ları kullanıcılara siteden indirt
+- Eski installer'lar (sadece GitHub URL'i bilen) hâlâ GitHub'dan update almaya devam eder
+- Yeni installer'lar (her iki URL'i de bilen) site'den update alır
 
-Updater "kim ödedi" diye sormaz, sadece imzayı kontrol eder. Lisans için **ayrı bir sistem** lazım:
+**Önemli:** Bu config değişikliğinden sonraki release'i hem GitHub Releases'a hem siteye koymalısın — eski installer'lar GitHub'dan, yeni installer'lar site'den çekecek.
 
-**Seçenek 1 — Hazır SaaS (kolay):**
-- **LemonSqueezy** (Stripe alternatif, KDV otomatik halleder)
-- **Paddle** (KDV halleder, kişisel hesap güç)
-- **Gumroad** (basit ama sınırlı)
+### C. (Opsiyonel) Repo'yu private yap
 
-Bunlar lisans key üretir, ödeme alır, KDV/vergi halleder. App açılışta key'i sorar, key'i SaaS API'sine doğrulatır.
+Kapalı kaynak ticari ürüne geçmek istersen:
 
-**Seçenek 2 — Kendi backend'in:**
-- Stripe Checkout entegre et
-- Lisans key'i Stripe webhook'tan üret + DB'ye kaydet
-- App key'i kendi API'mizden doğrulasın
-- Daha fazla iş, daha fazla kontrol
+1. **Sadece ana kod** repo'sunu private yap (`KatincBK/birik`)
+2. **Public bir release repo** ayır (`KatincBK/birik-releases`) — sadece release dosyaları
+3. Endpoint URL'i o public repo'ya bakar:
+   ```
+   https://github.com/KatincBK/birik-releases/releases/latest/download/latest.json
+   ```
+4. GitHub Actions release workflow'u o repo'ya push'lar
 
-Öneri: **LemonSqueezy** ile başla. Sonra büyürse kendi backend'e geç.
+Eğer bu noktadayken kullanıcılar zaten siteyi kullanıyorsa, GitHub'ı düşürebilirsin — sadece çok eski kullanıcılar etkilenir.
 
-**Lisans key validasyonu app içinde nasıl olmalı?**
-- İlk açılışta key sorar → API'ye gönderir → "geçerli" yanıtı alırsa local'e kaydeder
-- Periyodik (haftalık?) tekrar doğrular (offline grace period ile)
-- Trial mode: 14 gün sınırsız, sonra read-only
+### D. Ödeme + lisans sistemi (updater'dan tamamen ayrı)
 
-### D. Windows Code Signing sertifikası
+Updater "bedava mı, ücretli mi" diye sormaz, sadece imzayı kontrol eder. Lisans için **ayrı bir sistem** kuracağız:
 
-Bu olmadan kullanıcı `.msi`'yi indirince Windows "bilinmeyen yayıncı, çalıştırma" diye uyarır. Ticari satıyorsak bu bariyer cidden iticidir.
+**Önerilen — LemonSqueezy:**
+- Stripe alternatif, KDV/vergi otomatik halleder
+- Lisans key üretir, satar
+- App içinde key prompt + API doğrulaması
+- Trial mode (14 gün) yerel saklanır
 
-**Seçenekler:**
-- **Azure Trusted Signing** — ~$10/ay, en uygun fiyatlı modern çözüm. Microsoft'un yeni servisi.
-- **Sectigo / SSL.com EV** — ~$200-400/yıl, daha köklü ama pahalı
+**Alternatif:** Stripe + kendi backend (daha fazla iş, daha fazla kontrol).
+
+### E. Windows Code Signing sertifikası
+
+Bu olmadan kullanıcı .exe'yi çalıştırınca Windows "bilinmeyen yayıncı, çalıştırma" diye uyarır. Ticari satıyorsak gerekli:
+
+- **Azure Trusted Signing** — ~$10/ay, en uygun fiyatlı modern çözüm (önerilen)
+- **Sectigo / SSL.com EV** — ~$200-400/yıl, daha köklü
 - **DigiCert** — ~$400-700/yıl, kurumsal düzey
 
-İlk yıl: Azure Trusted Signing.
+Sertifika alındıktan sonra Tauri config'inde `bundle.windows` altına thumbprint eklenir.
 
-Sertifika alındıktan sonra Tauri config'inde `tauri.conf.json` → `bundle.windows` altına `certificateThumbprint` eklenir veya CI build sırasında `signtool` çağrılır.
+---
 
-### E. Otomatik release pipeline (CI)
+## Eski kullanıcı / migration senaryoları
 
-Manuel `just release` yerine:
-- Git tag push edilince (örn. `v0.3.0`) GitHub Actions çalışsın
-- Self-hosted runner veya windows-latest'te `npm run tauri build`
-- `TAURI_SIGNING_PRIVATE_KEY` ve parolası secret olarak GitHub'da
-- `.msi` + `.sig` + `latest.json` otomatik R2/CDN'e push
-- Slack/Discord notify
+### Senaryo 1: Site açıldı, kullanıcı v0.4.0 (sadece GitHub bilen sürüm) kullanıyor
+- Yeni release v0.5.0 hem GitHub'a hem siteye yüklenirse → kullanıcı GitHub'dan v0.5.0 update'i alır → v0.5.0 installer'ında iki endpoint var → bir sonraki kontrol siteye gider
 
-Repo private olduğu için Actions dakikaları ücretli — ayda birkaç release için sorun yok.
+### Senaryo 2: Repo private yapıldı, eski GitHub URL'i 404 dönüyor
+- Eğer site endpoint'i ilk sırada ise updater siteyi dener, oradan alır → sorun yok
+- Eğer sadece GitHub URL'i bilen çok eski bir installer varsa → kullanıcı sıkışır → mail/blog ile "manuel yeni .exe indir" duyurusu yapılır
+
+### Senaryo 3: İmza anahtarı kayboldu
+- Felaket. Yeni keypair üret → yeni public key içeren bir installer çıkar → kullanıcılara **manuel** olarak yeni installer'a geçmelerini söyle
+- Bu yüzden private key 3 yerde yedeklenir (1Password + USB + güvendiğin biri)
 
 ---
 
@@ -243,53 +229,52 @@ Repo private olduğu için Actions dakikaları ücretli — ayda birkaç release
 - Minor (1.0.x → 1.1.0): yeni özellik
 - Patch (1.0.0 → 1.0.1): bug fix
 
-`package.json`, `src-tauri/Cargo.toml`, `src-tauri/tauri.conf.json` üçü de **aynı versiyonda** olmak zorunda. İleride `just bump 0.3.0` script'i bunları senkron tutsun.
+**Üç dosyada versiyon eşit olmak zorunda:**
+- `package.json`
+- `src-tauri/Cargo.toml`
+- `src-tauri/tauri.conf.json`
+
+İleride `scripts/bump.mjs` veya `just bump 0.3.0` script'i bunları senkron tutsun.
 
 ---
 
-## Eski kullanıcı / migration senaryoları
+## Sıralı checklist
 
-### Senaryo 1: Sıfırdan başlıyoruz, hiç kullanıcı yok
-Şu anki durumumuz. Endpoint URL'i serbestçe seçebiliriz, hata yapma şansımız max.
+### Faz 1 — Aktif kullanım için kalan işler
+- [x] Signing keypair üret + yedekle
+- [x] `tauri.conf.json` config (pubkey + endpoint + active)
+- [x] Frontend `useUpdateChecker` hook + App mount
+- [ ] **GitHub repo public mi kontrol et** (`https://github.com/KatincBK/birik` erişilebilir olmalı)
+- [ ] Seçenek A veya B ile ilk release'i çıkar (`v0.1.0`)
+- [ ] Test: eski versiyonu kur → yeni release çıkar → app açılınca toast görmeli
+- [ ] (Opsiyonel) Settings sayfasında "Güncellemeleri kontrol et" butonu — boot dışı manuel tetik
+- [ ] (Opsiyonel) GitHub Actions release workflow yaz
 
-### Senaryo 2: GitHub'dan birkaç kişi indirmiş, sonra siteye taşıyacağız
-Eğer **endpoint URL'i kendi domain'imizdeyse** problem yok, sadece DNS değişir.
-Eğer endpoint URL'i `github.com/...`'a bakıyorsa ve repo private olacaksa, eski kullanıcılar son sürümü asla göremez — onlara mail/blog'dan "manuel yeni .msi indir, ondan sonra otomatik olacak" diye duyurmamız lazım.
-
-### Senaryo 3: İmza anahtarı kayboldu
-Felaket. Eski binary'lerin doğrulayacağı public key elimizde yoksa yeni binary'leri imzalasak bile validasyon başarısız olur. Çözüm: yeni keypair üret, yeni public key'i içeren bir yeni installer çıkar, kullanıcılara **manuel olarak** yeni versiyona geçmelerini söyle.
-
-Bu yüzden **private key yedeği şart**. Üç yerde tut: şifre yöneticisi + offline USB + güvendiğin biri.
-
----
-
-## Sıralı checklist (faz 1)
-
-- [ ] Domain satın al (ör. `birik.app`)
-- [ ] DNS'i Cloudflare'a taşı (yönetimi merkezi)
-- [ ] Cloudflare R2 bucket oluştur, `updates.birik.app` subdomain'ini ona bağla
-- [ ] `npx @tauri-apps/cli signer generate` ile keypair üret
-- [ ] Private key'i 1Password + USB yedek
-- [ ] `tauri.conf.json:47` pubkey güncelle
-- [ ] `tauri.conf.json:42` `active: true`
-- [ ] `tauri.conf.json:44` endpoint URL'i (`https://updates.birik.app/latest.json`)
-- [ ] Frontend'e `check()` ve `downloadAndInstall()` toast UI'sı ekle
-- [ ] `just release` script'i yaz (versiyon bump + build + upload + latest.json güncelle)
-- [ ] Test: lokal v0.1.0 kur → R2'ye v0.2.0 yükle → app güncellemeyi görsün
-
-## Sıralı checklist (faz 2 — site açıldığında)
-
+### Faz 2 — Portföy sitesi açıldığında
 - [ ] Site frontend hazır
-- [ ] LemonSqueezy / Stripe hesabı aç + ürünü tanımla
-- [ ] App'e lisans key prompt + validasyon API'si ekle
-- [ ] Trial mode (14 gün) implementasyonu
-- [ ] Azure Trusted Signing hesabı + sertifika
-- [ ] Tauri build config'e signing thumbprint ekle
-- [ ] GitHub Actions release workflow yaz
-- [ ] R2'den kendi sunucuya / yeni CDN'e geçiş (DNS değişikliği, dosyalar kopyalanır)
-- [ ] Repo'yu private yap
-- [ ] Açık kaynak fork'ları varsa kullanıcılarla iletişim (bu fork'ları yok et veya legal süreç)
-- [ ] Launch! 🚀
+- [ ] `birik/updates/` path'ine `latest.json` + `.exe` koyabilen bir yapı (statik upload ya da CMS)
+- [ ] `tauri.conf.json` endpoints dizisine site URL'i başa eklenir, GitHub fallback'te kalır
+- [ ] Yeni release: hem site'ye hem GitHub'a aynı dosyaları yükle
+- [ ] LemonSqueezy / Stripe hesabı + ürün
+- [ ] App'e lisans key prompt + validasyon
+- [ ] Trial mode (14 gün)
+- [ ] Azure Trusted Signing → .exe code signing
+- [ ] (Opsiyonel) Repo'yu private yap, `birik-releases` ayır
+- [ ] Launch 🚀
+
+---
+
+## Alternatif: Kendi domain'i kullanmak istersek (referans)
+
+Eğer ileride GitHub yerine kendi domain'imizden update servis etmek istersek:
+
+1. Domain al (örn. `birik.app`, Cloudflare Registrar at-cost)
+2. Cloudflare R2 bucket veya Pages projesi oluştur
+3. Custom domain bağla (`updates.birik.app` → bucket/project)
+4. `latest.json` ve `.exe`'leri buraya upload et
+5. `tauri.conf.json` endpoints dizisine bu URL'i en başa ekle, GitHub fallback'te kalır
+
+Bu yol daha pro görünüyor (kendi marka URL'in), ama domain ~$15/yıl + setup vakti gerektiriyor. **Şu an için GitHub Releases yeterli; site açıldığında zaten o sitenin sub-path'ini kullanacağız.**
 
 ---
 
@@ -299,6 +284,5 @@ Bu yüzden **private key yedeği şart**. Üç yerde tut: şifre yöneticisi + o
 - **latest.json**: o URL'in döndürdüğü, son sürüm bilgilerini içeren JSON dosyası
 - **Signing keypair**: bizim üretip yanımızda tuttuğumuz iki dosya. **Private** ile imzalarız, **public** app içine gömülür ve imzayı doğrular
 - **Code signing certificate**: Windows'a "bu yazılımı bilinen bir şirket çıkardı" diyen ayrı bir sertifika (yukarıdaki keypair'le KARIŞTIRMA)
-- **CDN**: dosyaları dünyanın her yerinden hızlıca servis eden ücretli/ücretsiz hosting
-- **R2 / S3 bucket**: bulutta dosya konabilen klasör
-- **Subdomain**: ana domain'in alt bölümü (`updates.birik.app` → `birik.app`'in updates alt bölümü)
+- **Tag**: Git'te bir commit'e isim verme yöntemi (`v0.2.0`); push edilince GitHub Actions workflow'u tetikler
+- **NSIS**: Windows .exe installer formatı, Tauri'nin default'u

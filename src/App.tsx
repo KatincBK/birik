@@ -14,6 +14,7 @@ import { Alerts } from "./pages/Alerts";
 import { Settings } from "./pages/Settings";
 import { useDbInit } from "./hooks/useDbInit";
 import { useShortcuts } from "./hooks/useShortcuts";
+import { useUpdateChecker } from "./hooks/useUpdateChecker";
 import { useProfileStore } from "./stores/profileStore";
 import { usePortfolioStore } from "./stores/portfolioStore";
 import { useBudgetStore } from "./stores/budgetStore";
@@ -34,6 +35,7 @@ export default function App() {
   const view = useUIStore((s) => s.view);
 
   useShortcuts();
+  useUpdateChecker(db.status === "ready");
 
   // Boot: settings + profiles
   useEffect(() => {

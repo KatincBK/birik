@@ -1,0 +1,46 @@
+name: Release
+
+# Tag push'unda tetiklenir (örn. `git tag v0.2.0 && git push --tags`).
+# Windows runner'da Tauri build alır, imzalar, GitHub Release'e yükler.
+# tauri-action `includeUpdaterJson: true` ile latest.json'u otomatik üretir.
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+jobs:
+  build-windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - name: Rust cache
+        uses: swatinem/rust-cache@v2
+        with:
+          workspaces: "src-tauri -> target"
+
+      - run: npm ci
+
+      - uses: tauri-apps/tauri-action@v0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+        with:
+          tagName: ${{ github.ref_name }}
+          releaseName: "Birik ${{ github.ref_name }}"
+          releaseBody: "Yenilikler için commit log'a bakabilirsin."
+          releaseDraft: false
+          prerelease: false
+          includeUpdaterJson: true
