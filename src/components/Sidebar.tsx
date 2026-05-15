@@ -369,9 +369,9 @@ export function Sidebar() {
           })}
         </ul>
 
-        {/* Bütçe — başlıksız, sadece varsa render. Yeni bütçe ekleme şimdilik
-            sidebar'da değil (kullanıcı profil başına 1 bütçeyle yetiniyor). */}
-        <div className={cn(budgets.length > 0 && "mt-3")}>
+        {/* Top-level nav: Bütçe + Yatırım + Hedef — hepsi bir listede,
+            kendi aralarında space-y-0.5 ile eş aralıklı. */}
+        <div className="mt-6">
           <ul className="space-y-0.5">
             {budgets.map((b) => {
               const active =
@@ -399,13 +399,6 @@ export function Sidebar() {
                 </li>
               );
             })}
-          </ul>
-        </div>
-
-        {/* Yatırım + Hedef — bütçeden bağımsız aylık birikim + uzun vadeli hedef.
-            Top-level başlık olarak prominent (semibold) gösteriliyor. */}
-        <div className="mt-6">
-          <ul className="space-y-0.5">
             <NavItem
               label="Yatırım"
               icon={<PiggyBank className="h-3.5 w-3.5" />}
