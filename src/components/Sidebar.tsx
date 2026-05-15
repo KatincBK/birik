@@ -3,7 +3,6 @@ import { getVersion } from "@tauri-apps/api/app";
 import {
   Settings,
   HelpCircle,
-  LayoutDashboard,
   Plus,
   Trash2,
   Pin,
@@ -13,7 +12,6 @@ import {
   PiggyBank,
   Target,
   Bell,
-  ChevronDown,
   Check,
   User,
 } from "lucide-react";
@@ -25,7 +23,6 @@ import { useBudgetStore } from "../stores/budgetStore";
 import { useProfileStore } from "../stores/profileStore";
 import { useUIStore } from "../stores/uiStore";
 import { CreatePortfolioModal } from "./CreatePortfolioModal";
-import { CreateBudgetModal } from "./CreateBudgetModal";
 import { playSound } from "../lib/sounds";
 
 export function Sidebar() {
@@ -171,8 +168,6 @@ export function Sidebar() {
   };
 
   const portfolioGroupTitle = portfolios.length > 1 ? "Portföyler" : "Portföy";
-  // Profil başına en fazla 1 bütçe — başlık her zaman tekil "Bütçe"
-  const budgetGroupTitle = "Bütçe";
   const activeProfile = profiles.find((p) => p.id === activeProfileId) ?? null;
   const [profileMenuOpen, setProfileMenuOpen] = useState(false);
 
@@ -230,36 +225,36 @@ export function Sidebar() {
 
   return (
     <aside className="flex h-full w-60 shrink-0 flex-col border-r border-(--color-border-subtle) bg-(--color-bg-panel)">
-      {/* BIRIK marka butonu — Anasayfaya götürür */}
-      <button
-        onClick={goHome}
-        className={cn(
-          "flex h-14 w-full items-center gap-2.5 border-b border-(--color-border-subtle) px-3 text-left transition-colors",
-          view.kind === "home"
-            ? "bg-(--color-bg-hover) text-(--color-text-primary)"
-            : "text-(--color-text-primary) hover:bg-(--color-bg-hover)"
-        )}
-      >
-        <img
-          src={birikLogo}
-          alt="Birik"
-          className="h-8 w-8 select-none"
-          draggable={false}
-        />
-        <span className="text-base font-bold tracking-tight">BIRIK</span>
-      </button>
-
-      {/* Profil seçici — kompakt chip */}
-      <div className="relative px-3 pt-2.5">
+      {/* BIRIK marka butonu + sağında profil ikonu */}
+      <div className="relative flex h-14 items-stretch border-b border-(--color-border-subtle)">
+        <button
+          onClick={goHome}
+          className={cn(
+            "flex flex-1 items-center gap-2.5 px-3 text-left transition-colors",
+            view.kind === "home"
+              ? "bg-(--color-bg-hover) text-(--color-text-primary)"
+              : "text-(--color-text-primary) hover:bg-(--color-bg-hover)"
+          )}
+        >
+          <img
+            src={birikLogo}
+            alt="Birik"
+            className="h-8 w-8 select-none"
+            draggable={false}
+          />
+          <span className="text-base font-bold tracking-tight">BIRIK</span>
+        </button>
         <button
           onClick={() => setProfileMenuOpen((v) => !v)}
-          className="flex w-full items-center gap-1.5 rounded-md px-2 py-1 text-left transition-colors hover:bg-(--color-bg-hover)"
+          title={activeProfile?.name ?? "Profil"}
+          className={cn(
+            "grid w-11 place-items-center border-l border-(--color-border-subtle) transition-colors",
+            profileMenuOpen
+              ? "bg-(--color-bg-hover) text-(--color-accent)"
+              : "text-(--color-text-tertiary) hover:bg-(--color-bg-hover) hover:text-(--color-text-primary)"
+          )}
         >
-          <User className="h-3 w-3 text-(--color-text-tertiary)" />
-          <span className="flex-1 truncate text-xs text-(--color-text-secondary)">
-            {activeProfile?.name ?? "Profil"}
-          </span>
-          <ChevronDown className="h-3 w-3 text-(--color-text-tertiary)" />
+          <User className="h-4 w-4" />
         </button>
 
         {profileMenuOpen && (
@@ -268,7 +263,10 @@ export function Sidebar() {
               className="fixed inset-0 z-40"
               onClick={() => setProfileMenuOpen(false)}
             />
-            <div className="absolute left-3 right-3 top-9 z-50 overflow-hidden rounded-lg border border-(--color-border-subtle) bg-(--color-bg-panel) py-1 text-sm shadow-2xl shadow-black/50">
+            <div className="absolute right-2 top-12 z-50 w-56 overflow-hidden rounded-lg border border-(--color-border-subtle) bg-(--color-bg-panel) py-1 text-sm shadow-2xl shadow-black/50">
+              <div className="px-3 pb-1 pt-1 text-[10px] font-medium tracking-[0.05em] text-(--color-text-tertiary) uppercase">
+                Profiller
+              </div>
               {profiles.map((p) => (
                 <button
                   key={p.id}
@@ -328,21 +326,19 @@ export function Sidebar() {
         )}
       </div>
 
-      {/* Portföyler */}
+      {/* Portföyler — başlık tıklanınca "Hepsi" görünümü açılır */}
       <div className="flex-1 overflow-y-auto px-3 py-2">
         <GroupHeader
           title={portfolioGroupTitle}
           onAdd={() => openModal(<CreatePortfolioModal />)}
+          onTitleClick={showSingle ? undefined : () => onSelectPortfolio(null)}
+          titleActive={
+            !showSingle &&
+            activePortfolioId === null &&
+            view.kind === "dashboard"
+          }
         />
         <ul className="space-y-0.5">
-          {!showSingle && (
-            <NavItem
-              label="Hepsi"
-              icon={<LayoutDashboard className="h-3.5 w-3.5" />}
-              active={activePortfolioId === null && view.kind === "dashboard"}
-              onClick={() => onSelectPortfolio(null)}
-            />
-          )}
           {portfolios.map((p) => {
             const active = p.id === activePortfolioId && view.kind === "dashboard";
             return (
@@ -371,29 +367,10 @@ export function Sidebar() {
           })}
         </ul>
 
-        {/* Bütçe — profil başına 1 tane */}
-        <div className="mt-6">
-          <div className="flex items-center justify-between px-2 pb-2">
-            <span className="text-[11px] font-medium tracking-[0.05em] text-(--color-text-tertiary) uppercase">
-              {budgetGroupTitle}
-            </span>
-            {budgets.length === 0 && (
-              <button
-                onClick={() => openModal(<CreateBudgetModal />)}
-                aria-label="Yeni bütçe"
-                title="Yeni bütçe"
-                className="grid h-5 w-5 place-items-center rounded-md text-(--color-text-tertiary) transition-colors hover:bg-(--color-bg-hover) hover:text-(--color-text-primary)"
-              >
-                <Plus className="h-3.5 w-3.5" strokeWidth={2.5} />
-              </button>
-            )}
-          </div>
+        {/* Bütçe — başlıksız, sadece varsa render. Yeni bütçe ekleme şimdilik
+            sidebar'da değil (kullanıcı profil başına 1 bütçeyle yetiniyor). */}
+        <div className={cn(budgets.length > 0 && "mt-3")}>
           <ul className="space-y-0.5">
-            {budgets.length === 0 && (
-              <li className="px-3 py-2 text-xs text-(--color-text-tertiary)">
-                henüz bütçe yok
-              </li>
-            )}
             {budgets.map((b) => {
               const active =
                 b.id === activeBudgetId && view.kind === "budget";
@@ -425,7 +402,8 @@ export function Sidebar() {
           </ul>
         </div>
 
-        {/* Yatırım + Hedef — bütçeden bağımsız aylık birikim + uzun vadeli hedef */}
+        {/* Yatırım + Hedef — bütçeden bağımsız aylık birikim + uzun vadeli hedef.
+            Top-level başlık olarak prominent (semibold) gösteriliyor. */}
         <div className="mt-6">
           <ul className="space-y-0.5">
             <NavItem
@@ -433,12 +411,14 @@ export function Sidebar() {
               icon={<PiggyBank className="h-3.5 w-3.5" />}
               active={view.kind === "investments"}
               onClick={goInvestments}
+              prominent
             />
             <NavItem
               label="Hedef"
               icon={<Target className="h-3.5 w-3.5" />}
               active={view.kind === "goal"}
               onClick={goGoal}
+              prominent
             />
           </ul>
         </div>
@@ -526,15 +506,35 @@ export function Sidebar() {
 function GroupHeader({
   title,
   onAdd,
+  onTitleClick,
+  titleActive,
 }: {
   title: string;
   onAdd: () => void;
+  onTitleClick?: () => void;
+  titleActive?: boolean;
 }) {
+  const titleClass = cn(
+    "text-[12px] font-semibold tracking-[0.05em] uppercase transition-colors",
+    titleActive
+      ? "text-(--color-text-primary)"
+      : "text-(--color-text-secondary)"
+  );
   return (
     <div className="flex items-center justify-between px-2 pb-2">
-      <span className="text-[11px] font-medium tracking-[0.05em] text-(--color-text-tertiary) uppercase">
-        {title}
-      </span>
+      {onTitleClick ? (
+        <button
+          onClick={onTitleClick}
+          className={cn(
+            titleClass,
+            "rounded px-0.5 hover:text-(--color-text-primary)"
+          )}
+        >
+          {title}
+        </button>
+      ) : (
+        <span className={titleClass}>{title}</span>
+      )}
       <button
         onClick={onAdd}
         aria-label={`Yeni ${title.toLowerCase()}`}
@@ -552,11 +552,13 @@ function NavItem({
   icon,
   active,
   onClick,
+  prominent,
 }: {
   label: string;
   icon: React.ReactNode;
   active: boolean;
   onClick: () => void;
+  prominent?: boolean;
 }) {
   return (
     <li>
@@ -564,6 +566,7 @@ function NavItem({
         onClick={onClick}
         className={cn(
           "flex w-full items-center gap-2.5 rounded-lg px-3 py-2 text-left text-sm transition-colors duration-150",
+          prominent && "font-semibold tracking-[0.02em]",
           active
             ? "bg-(--color-bg-hover) text-(--color-text-primary)"
             : "text-(--color-text-secondary) hover:bg-(--color-bg-hover) hover:text-(--color-text-primary)"
