@@ -8,6 +8,7 @@ export type View =
   | { kind: "budget"; budgetId: number }
   | { kind: "investments" }
   | { kind: "passiveIncome" }
+  | { kind: "goal" }
   | { kind: "alerts" }
   | { kind: "settings" };
 
@@ -20,6 +21,7 @@ type UIState = {
   goBudget: (budgetId: number) => void;
   goInvestments: () => void;
   goPassiveIncome: () => void;
+  goGoal: () => void;
   goAlerts: () => void;
   goSettings: () => void;
 
@@ -42,6 +44,7 @@ export const useUIStore = create<UIState>((set) => ({
   goBudget: (budgetId) => set({ view: { kind: "budget", budgetId } }),
   goInvestments: () => set({ view: { kind: "investments" } }),
   goPassiveIncome: () => set({ view: { kind: "passiveIncome" } }),
+  goGoal: () => set({ view: { kind: "goal" } }),
   goAlerts: () => set({ view: { kind: "alerts" } }),
   goSettings: () => set({ view: { kind: "settings" } }),
 

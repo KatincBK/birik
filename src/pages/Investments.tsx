@@ -20,7 +20,7 @@ import {
   Calculator,
 } from "lucide-react";
 import { toast } from "sonner";
-import { api, type FxRates, type InvestmentEntry } from "../lib/api";
+import { api, type FxRates, type HomeSummary, type InvestmentEntry } from "../lib/api";
 import { useProfileStore } from "../stores/profileStore";
 import { useSettingsStore } from "../stores/useSettingsStore";
 import { useUIStore } from "../stores/uiStore";
@@ -75,6 +75,25 @@ export function Investments() {
 
   const [entries, setEntries] = useState<InvestmentEntry[]>([]);
   const [loading, setLoading] = useState(true);
+
+  // Yıllık + Toplam modlarında KPI ve projeksiyon için home_summary çekiyoruz
+  // (cagr_pct = yıllık ortalama getiri %, total_value = portföy büyüklüğü)
+  const [homeSummary, setHomeSummary] = useState<HomeSummary | null>(null);
+  useEffect(() => {
+    if (profileId == null) return;
+    let cancelled = false;
+    api
+      .homeSummary(profileId, displayCurrency)
+      .then((s) => {
+        if (!cancelled) setHomeSummary(s);
+      })
+      .catch(() => {
+        if (!cancelled) setHomeSummary(null);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [profileId, displayCurrency]);
 
   const [ctxMenu, setCtxMenu] = useState<
     | { entry: InvestmentEntry; x: number; y: number }
@@ -182,7 +201,53 @@ export function Investments() {
     }));
   }, [monthlyDisplay]);
 
-  const [chartMode, setChartMode] = useState<"monthly" | "cumulative">("monthly");
+  const [chartMode, setChartMode] = useState<"monthly" | "yearly" | "cumulative">(
+    "monthly"
+  );
+
+  // Yıllık bar chart için ay → yıl agregasyonu
+  const yearlyDisplay = useMemo(() => {
+    const map = new Map<string, number>();
+    for (const m of monthlyDisplay) {
+      const year = m.ym.slice(0, 4);
+      map.set(year, (map.get(year) ?? 0) + m.value);
+    }
+    return [...map.entries()]
+      .sort((a, b) => a[0].localeCompare(b[0]))
+      .map(([year, value]) => ({
+        ym: year,
+        raw: value,
+        display: sqrtTransform(value),
+      }));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [monthlyDisplay]);
+
+  // Toplam modunda sarı çizgi: ortalama yıllık getiriyle (CAGR) simüle edilen
+  // portföy. sim[i] = sim[i-1] * (1+monthly_r) + invest[i].
+  // cagr yoksa projection çizilmiyor (yarı boş çizgi göstermek yerine bilgi vermez).
+  const projectionDisplay = useMemo(() => {
+    const cagr = homeSummary?.cagr_pct;
+    if (cagr == null || monthlyDisplay.length === 0) return null;
+    const monthlyRate = Math.pow(1 + cagr / 100, 1 / 12) - 1;
+    let sim = 0;
+    return monthlyDisplay.map((m) => {
+      sim = sim * (1 + monthlyRate) + m.value;
+      return { ym: m.ym, projection: sim };
+    });
+  }, [monthlyDisplay, homeSummary]);
+
+  // Toplam mod için iki çizgi tek dataset: cumulative + projection ym key'iyle merge
+  const cumulativeWithProjection = useMemo(() => {
+    if (!projectionDisplay) {
+      return cumulativeDisplay.map((c) => ({ ym: c.ym, cumulative: c.cumulative, projection: null as number | null }));
+    }
+    const projMap = new Map(projectionDisplay.map((p) => [p.ym, p.projection]));
+    return cumulativeDisplay.map((c) => ({
+      ym: c.ym,
+      cumulative: c.cumulative,
+      projection: projMap.get(c.ym) ?? null,
+    }));
+  }, [cumulativeDisplay, projectionDisplay]);
 
   // Signed square root — log10'dan daha hafif sıkıştırma. 0 simetrik.
   // Bar yüksekliği transform edilmiş space'te, tooltip orijinal değer gösterir.
@@ -249,7 +314,8 @@ export function Investments() {
         </button>
       </header>
 
-      {/* Özet kartları — kullanıcının display currency'sinde */}
+      {/* Özet kartları — Aylık modda: toplam/aylık ort/yıllık ort.
+          Yıllık+Toplam modda: toplam/yıllık getiri %/portföy büyüklüğü. */}
       <div className="grid grid-cols-2 gap-3 sm:grid-cols-3">
         <Stat
           icon={<PiggyBank className="h-4 w-4" />}
@@ -260,24 +326,56 @@ export function Investments() {
               : "—"
           }
         />
-        <Stat
-          icon={<Coins className="h-4 w-4" />}
-          label="Aylık ortalama"
-          value={
-            totals.months > 0
-              ? formatCurrency(totals.monthlyAvg, displayCurrency, "summary")
-              : "—"
-          }
-        />
-        <Stat
-          icon={<TrendingUp className="h-4 w-4" />}
-          label="Yıllık ortalama"
-          value={
-            totals.months > 0
-              ? formatCurrency(totals.annualAvg, displayCurrency, "summary")
-              : "—"
-          }
-        />
+        {chartMode === "monthly" ? (
+          <>
+            <Stat
+              icon={<Coins className="h-4 w-4" />}
+              label="Aylık ortalama"
+              value={
+                totals.months > 0
+                  ? formatCurrency(totals.monthlyAvg, displayCurrency, "summary")
+                  : "—"
+              }
+            />
+            <Stat
+              icon={<TrendingUp className="h-4 w-4" />}
+              label="Yıllık ortalama"
+              value={
+                totals.months > 0
+                  ? formatCurrency(totals.annualAvg, displayCurrency, "summary")
+                  : "—"
+              }
+            />
+          </>
+        ) : (
+          <>
+            <Stat
+              icon={<TrendingUp className="h-4 w-4" />}
+              label="Yıllık getiri (ort.)"
+              value={
+                homeSummary?.cagr_pct != null
+                  ? `${homeSummary.cagr_pct >= 0 ? "+" : ""}${homeSummary.cagr_pct.toFixed(1)}%`
+                  : "—"
+              }
+              valueClass={
+                homeSummary?.cagr_pct != null
+                  ? homeSummary.cagr_pct >= 0
+                    ? "text-(--color-success)"
+                    : "text-(--color-danger)"
+                  : undefined
+              }
+            />
+            <Stat
+              icon={<Coins className="h-4 w-4" />}
+              label="Portföy büyüklüğü"
+              value={
+                homeSummary?.total_value != null
+                  ? formatCurrency(homeSummary.total_value, displayCurrency, "summary")
+                  : "—"
+              }
+            />
+          </>
+        )}
       </div>
 
       {/* Trend chart — Aylık (bar) ↔ Kümülatif (log line) */}
@@ -287,10 +385,12 @@ export function Investments() {
             <h2 className="text-[11px] font-medium tracking-[0.05em] text-(--color-text-secondary) uppercase">
               {chartMode === "monthly"
                 ? `Aylık birikim — log ölçek (${displayCurrency})`
+                : chartMode === "yearly"
+                ? `Yıllık birikim (${displayCurrency})`
                 : `Toplam birikim — kümülatif (${displayCurrency})`}
             </h2>
             <div className="inline-flex gap-0.5 rounded-lg border border-(--color-border-subtle) bg-(--color-bg-panel) p-1">
-              {(["monthly", "cumulative"] as const).map((m) => (
+              {(["monthly", "yearly", "cumulative"] as const).map((m) => (
                 <button
                   key={m}
                   onClick={() => setChartMode(m)}
@@ -301,7 +401,7 @@ export function Investments() {
                       : "border border-transparent text-(--color-text-secondary) hover:text-(--color-text-primary)"
                   )}
                 >
-                  {m === "monthly" ? "Aylık" : "Toplam"}
+                  {m === "monthly" ? "Aylık" : m === "yearly" ? "Yıllık" : "Toplam"}
                 </button>
               ))}
             </div>
@@ -366,9 +466,59 @@ export function Investments() {
                       }}
                     />
                   </BarChart>
+                ) : chartMode === "yearly" ? (
+                  <BarChart data={yearlyDisplay}>
+                    <CartesianGrid stroke="var(--color-border-subtle)" strokeDasharray="3 3" />
+                    <XAxis dataKey="ym" stroke="var(--color-text-tertiary)" tick={{ fontSize: 12 }} />
+                    <YAxis
+                      stroke="var(--color-text-tertiary)"
+                      tick={{ fontSize: 11 }}
+                      domain={["dataMin", "dataMax"]}
+                      tickFormatter={(t: number) =>
+                        formatCurrency(sqrtInverse(t), displayCurrency, "summary")
+                      }
+                    />
+                    <Tooltip
+                      cursor={{ fill: "rgba(255,255,255,0.04)" }}
+                      content={({ active, payload }) => {
+                        if (!active || !payload?.length) return null;
+                        const p = payload[0].payload as { ym: string; raw: number };
+                        return (
+                          <div className="rounded-lg border border-(--color-border-subtle) bg-(--color-bg-panel) px-3 py-2 text-xs">
+                            <div className="text-base font-semibold tabular text-(--color-text-primary)">
+                              {formatCurrency(p.raw, displayCurrency, "summary")}
+                            </div>
+                            <div className="mt-0.5 text-[11px] text-(--color-text-tertiary)">
+                              {p.ym}
+                            </div>
+                          </div>
+                        );
+                      }}
+                    />
+                    <Bar
+                      dataKey="display"
+                      shape={(props: any) => {
+                        const negative = (props?.payload?.raw ?? 0) < 0;
+                        const fill = negative ? "#FF8B7A" : "#6FD3EC";
+                        const h = Math.abs(props.height ?? 0);
+                        const y = (props.height ?? 0) < 0 ? props.y + props.height : props.y;
+                        return (
+                          <rect
+                            x={props.x}
+                            y={y}
+                            width={props.width}
+                            height={h}
+                            rx={4}
+                            ry={4}
+                            fill={fill}
+                          />
+                        );
+                      }}
+                    />
+                  </BarChart>
                 ) : (
                   <LineChart
-                    data={cumulativeDisplay}
+                    data={cumulativeWithProjection}
                     margin={{ top: 8, right: 12, left: 0, bottom: 0 }}
                   >
                     <CartesianGrid stroke="var(--color-border-subtle)" strokeDasharray="3 3" />
@@ -386,13 +536,31 @@ export function Investments() {
                         stroke: "var(--color-border-strong)",
                         strokeDasharray: "3 3",
                       }}
-                      contentStyle={{
-                        background: "var(--color-bg-panel)",
-                        border: "1px solid var(--color-border-subtle)",
-                        borderRadius: 8,
-                        fontSize: 12,
+                      content={({ active, payload }) => {
+                        if (!active || !payload?.length) return null;
+                        const p = payload[0].payload as {
+                          ym: string;
+                          cumulative: number;
+                          projection: number | null;
+                        };
+                        return (
+                          <div className="rounded-lg border border-(--color-border-subtle) bg-(--color-bg-panel) px-3 py-2 text-xs space-y-0.5">
+                            <div className="font-medium tabular text-(--color-text-primary)">
+                              {p.ym}
+                            </div>
+                            <div className="flex items-center gap-1.5 text-[#6FD3EC]">
+                              <span className="h-2 w-2 rounded-full bg-[#6FD3EC]" />
+                              Yatırılan: {formatCurrency(p.cumulative, displayCurrency, "summary")}
+                            </div>
+                            {p.projection != null && (
+                              <div className="flex items-center gap-1.5 text-[#F5C45C]">
+                                <span className="h-2 w-2 rounded-full bg-[#F5C45C]" />
+                                Portföy (sim.): {formatCurrency(p.projection, displayCurrency, "summary")}
+                              </div>
+                            )}
+                          </div>
+                        );
                       }}
-                      formatter={(v) => formatCurrency(Number(v), displayCurrency, "summary")}
                     />
                     <Line
                       type="monotone"
@@ -405,6 +573,20 @@ export function Investments() {
                       animationDuration={400}
                       animationEasing="ease-out"
                     />
+                    {projectionDisplay && (
+                      <Line
+                        type="monotone"
+                        dataKey="projection"
+                        stroke="#F5C45C"
+                        strokeWidth={1.5}
+                        strokeDasharray="4 3"
+                        dot={false}
+                        activeDot={{ r: 4, fill: "#F5C45C", strokeWidth: 0 }}
+                        isAnimationActive
+                        animationDuration={500}
+                        animationEasing="ease-out"
+                      />
+                    )}
                   </LineChart>
                 )}
               </ResponsiveContainer>
@@ -414,6 +596,18 @@ export function Investments() {
                 Y ekseni signed-sqrt — küçük ve büyük tutarlar arası sıkıştırma
                 log'dan daha hafif. Negatif aylar (somon) ve pozitif aylar (mavi)
                 aynı ölçekte, sıfır X ekseninde.
+              </p>
+            )}
+            {chartMode === "cumulative" && projectionDisplay && (
+              <p className="mt-2 flex items-center gap-2 text-[11px] text-(--color-text-tertiary)">
+                <span className="inline-flex items-center gap-1">
+                  <span className="h-2 w-2 rounded-full bg-[#6FD3EC]" /> Toplam yatırılan
+                </span>
+                <span className="inline-flex items-center gap-1">
+                  <span className="h-2 w-0.5 bg-[#F5C45C]" />
+                  <span className="h-2 w-2 rounded-full border border-[#F5C45C]" />
+                  Portföy simülasyonu — yıllık {homeSummary?.cagr_pct?.toFixed(1)}% getiriyle
+                </span>
               </p>
             )}
           </div>
@@ -596,10 +790,12 @@ function Stat({
   icon,
   label,
   value,
+  valueClass,
 }: {
   icon: React.ReactNode;
   label: string;
   value: string;
+  valueClass?: string;
 }) {
   return (
     <div className="rounded-xl border border-(--color-border-subtle) bg-(--color-bg-panel) px-4 py-3">
@@ -609,7 +805,9 @@ function Stat({
           {label}
         </span>
       </div>
-      <div className="mt-1 text-base font-semibold tabular">{value}</div>
+      <div className={cn("mt-1 text-base font-semibold tabular", valueClass)}>
+        {value}
+      </div>
     </div>
   );
 }

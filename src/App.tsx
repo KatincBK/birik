@@ -10,6 +10,7 @@ import { AssetDetail } from "./pages/AssetDetail";
 import { Budget } from "./pages/Budget";
 import { Investments } from "./pages/Investments";
 import { PassiveIncome } from "./pages/PassiveIncome";
+import { Goal } from "./pages/Goal";
 import { Alerts } from "./pages/Alerts";
 import { Settings } from "./pages/Settings";
 import { useDbInit } from "./hooks/useDbInit";
@@ -102,6 +103,8 @@ export default function App() {
     title = "Yatırım";
   } else if (view.kind === "passiveIncome") {
     title = "Nakit akışları";
+  } else if (view.kind === "goal") {
+    title = "Hedef";
   } else if (view.kind === "alerts") {
     title = "Alarmlar";
   } else if (view.kind === "settings") {
@@ -131,6 +134,8 @@ export default function App() {
             <Investments />
           ) : view.kind === "passiveIncome" ? (
             <PassiveIncome />
+          ) : view.kind === "goal" ? (
+            <Goal />
           ) : view.kind === "alerts" ? (
             <Alerts />
           ) : (

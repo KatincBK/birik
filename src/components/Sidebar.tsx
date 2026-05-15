@@ -11,6 +11,7 @@ import {
   Pencil,
   Wallet as WalletIcon,
   PiggyBank,
+  Target,
   Bell,
   ChevronDown,
   Check,
@@ -52,6 +53,7 @@ export function Sidebar() {
   const goDashboard = useUIStore((s) => s.goDashboard);
   const goBudget = useUIStore((s) => s.goBudget);
   const goInvestments = useUIStore((s) => s.goInvestments);
+  const goGoal = useUIStore((s) => s.goGoal);
   const goAlerts = useUIStore((s) => s.goAlerts);
   const goSettings = useUIStore((s) => s.goSettings);
   const openModal = useUIStore((s) => s.openModal);
@@ -423,7 +425,7 @@ export function Sidebar() {
           </ul>
         </div>
 
-        {/* Yatırım — bütçeden bağımsız aylık birikim */}
+        {/* Yatırım + Hedef — bütçeden bağımsız aylık birikim + uzun vadeli hedef */}
         <div className="mt-6">
           <ul className="space-y-0.5">
             <NavItem
@@ -431,6 +433,12 @@ export function Sidebar() {
               icon={<PiggyBank className="h-3.5 w-3.5" />}
               active={view.kind === "investments"}
               onClick={goInvestments}
+            />
+            <NavItem
+              label="Hedef"
+              icon={<Target className="h-3.5 w-3.5" />}
+              active={view.kind === "goal"}
+              onClick={goGoal}
             />
           </ul>
         </div>
