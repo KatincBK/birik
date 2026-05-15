@@ -12,11 +12,11 @@ import {
   Wallet as WalletIcon,
   PiggyBank,
   Bell,
-  Home,
   ChevronDown,
   Check,
   User,
 } from "lucide-react";
+import birikLogo from "../assets/birik_logo.png";
 import { toast } from "sonner";
 import { cn } from "../lib/cn";
 import { usePortfolioStore } from "../stores/portfolioStore";
@@ -228,7 +228,7 @@ export function Sidebar() {
 
   return (
     <aside className="flex h-full w-60 shrink-0 flex-col border-r border-(--color-border-subtle) bg-(--color-bg-panel)">
-      {/* Anasayfa — sidebar'ın en prominent giriş noktası */}
+      {/* BIRIK marka butonu — Anasayfaya götürür */}
       <button
         onClick={goHome}
         className={cn(
@@ -238,10 +238,13 @@ export function Sidebar() {
             : "text-(--color-text-primary) hover:bg-(--color-bg-hover)"
         )}
       >
-        <div className="grid h-8 w-8 place-items-center rounded-lg bg-(--color-accent)/15 text-(--color-accent)">
-          <Home className="h-4 w-4" strokeWidth={2.5} />
-        </div>
-        <span className="text-sm font-semibold tracking-tight">Anasayfa</span>
+        <img
+          src={birikLogo}
+          alt="Birik"
+          className="h-8 w-8 select-none"
+          draggable={false}
+        />
+        <span className="text-base font-bold tracking-tight">BIRIK</span>
       </button>
 
       {/* Profil seçici — kompakt chip */}
