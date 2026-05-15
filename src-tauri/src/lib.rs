@@ -6,8 +6,40 @@ pub mod services;
 use services::Db;
 use tauri::Manager;
 
+// Crash log — production build'de stderr yok, kullanıcı GUI app çalışmazsa
+// neyin patladığını göremiyor. LOCALAPPDATA altına satır satır yazıyoruz,
+// sorun yaşandığında bu dosya bize boot sequence'inin nerede koptuğunu söyler.
+fn crash_log_path() -> std::path::PathBuf {
+    std::env::var_os("LOCALAPPDATA")
+        .map(std::path::PathBuf::from)
+        .unwrap_or_else(std::env::temp_dir)
+        .join("birik_crash.log")
+}
+
+fn crash_log(msg: &str) {
+    use std::io::Write;
+    if let Ok(mut f) = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(crash_log_path())
+    {
+        let _ = writeln!(
+            f,
+            "[{}] {}",
+            chrono::Local::now().format("%Y-%m-%d %H:%M:%S%.3f"),
+            msg
+        );
+    }
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    // Panic hook + start marker — bu çağrıdan sonra ne olursa olsun log düşer
+    std::panic::set_hook(Box::new(|info| {
+        crash_log(&format!("=== PANIC ===\n{info}"));
+    }));
+    crash_log(&format!("=== App starting v{} ===", env!("CARGO_PKG_VERSION")));
+
     let mut builder = tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
         // plugin-sql migration listesi olmadan kuruluyor — migration'ları
@@ -18,26 +50,33 @@ pub fn run() {
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_fs::init())
         .setup(|app| {
+            crash_log("setup: entered");
             let handle = app.handle().clone();
             // DB pool boot'ta async init. Hata olursa app start fail.
             let db = tauri::async_runtime::block_on(async {
                 Db::init(&handle).await
             })?;
+            crash_log("setup: db pool ready");
             app.manage(db);
 
             // Alarm background loop (5 dk tick) — PLAN §6.1.F
             services::alarm_loop::spawn(app.handle().clone());
+            crash_log("setup: alarm loop spawned");
             // Günlük otomatik backup — PLAN §12 Faz 7
             services::backup::spawn_daily(app.handle().clone());
+            crash_log("setup: backup loop spawned");
             // Binance WebSocket — kripto canlı fiyat akışı
             services::binance_ws::spawn(app.handle().clone());
+            crash_log("setup: binance ws spawned, setup done");
 
             Ok(())
         });
+    crash_log("builder: core plugins mounted");
 
     #[cfg(desktop)]
     {
         builder = builder.plugin(tauri_plugin_updater::Builder::new().build());
+        crash_log("builder: updater plugin mounted");
     }
 
     builder
@@ -115,6 +154,15 @@ pub fn run() {
             commands::backup::import_data,
             commands::backup::trigger_backup,
         ])
-        .run(tauri::generate_context!())
-        .expect("error while running tauri application");
+        .build(tauri::generate_context!())
+        .map_err(|e| {
+            crash_log(&format!("FATAL build error: {e:?}"));
+            e
+        })
+        .expect("error while building tauri application")
+        .run(|_app, event| {
+            if matches!(event, tauri::RunEvent::Ready) {
+                crash_log("event: app ready");
+            }
+        });
 }
